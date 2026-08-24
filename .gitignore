@@ -1,3 +1,5 @@
 .env
 data/db.json
 *.log
+node_modules/
+.npm-cache/

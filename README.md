@@ -20,7 +20,17 @@ The authorization request uses only `identify`. The browser receives an opaque, 
 
 ## Storage
 
-The local no-dependency MVP uses `data/db.json`, which is ignored by Git. `schema.sql` defines the users and sessions relational schema to use when connecting a production database.
+Local development uses `data/db.json`, which is ignored by Git. Production uses PostgreSQL when `DATABASE_URL` is set. The server automatically creates its `donut_wagers_state` table and uses PostgreSQL row locking for every escrow reservation, so concurrent servers cannot reserve the same balance twice.
+
+Before a first production deploy, keep the local JSON file as a backup and import it once with a private `DATABASE_URL`:
+
+```powershell
+$env:DATABASE_URL = 'your-private-postgres-connection-string'
+npm install
+npm run import:postgres
+```
+
+The importer refuses to overwrite an existing production state unless you explicitly pass `--replace`. Never commit `data/db.json` or paste a database URL into chat.
 
 ## Minecraft verification with DonutWagersBot
 

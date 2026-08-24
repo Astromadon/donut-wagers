@@ -4,6 +4,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { DonutWagersBotService, IntegrationNotConfiguredError } = require('./minecraft-service');
 const { DiscordTicketService, DiscordTicketServiceError } = require('./discord-ticket-service');
+const { createPostgresStore } = require('./postgres-store');
 
 loadEnvFile();
 const PORT = Number(process.env.PORT || 3000);
@@ -16,6 +17,7 @@ const MICROSOFT_REDIRECT_URI = process.env.MICROSOFT_REDIRECT_URI || 'http://loc
 const BOT_WEBHOOK_SECRET = process.env.DONUT_WAGERS_BOT_WEBHOOK_SECRET;
 const ADMIN_DISCORD_ID = String(process.env.DONUT_WAGERS_ADMIN_DISCORD_ID || '').trim();
 const APP_BASE_URL = (process.env.APP_BASE_URL || `http://localhost:${PORT}`).replace(/\/+$/, '');
+const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const ROOT = __dirname;
 const DATA_FILE = path.join(ROOT, 'data', 'db.json');
@@ -38,41 +40,53 @@ function loadEnvFile() {
   } catch { /* .env is optional; environment variables take precedence. */ }
 }
 
-async function readDb() {
+function emptyDb() {
+  return { users: [], sessions: [], matches: [], minecraft_accounts: [], verification_codes: [], wagers: [], deposits: [], audit_logs: [], support_tickets: [], bans: [], bot_status: { last_heartbeat_at: null, bot_username: donutSmpService.botUsername } };
+}
+function normalizeDb(db) {
+  db ??= emptyDb();
+  db.users ??= [];
+  db.sessions ??= [];
+  db.matches ??= [];
+  db.minecraft_accounts ??= [];
+  db.verification_codes ??= [];
+  db.wagers ??= [];
+  db.deposits ??= [];
+  db.audit_logs ??= [];
+  db.support_tickets ??= [];
+  db.bans ??= [];
+  db.bot_status ??= { last_heartbeat_at: null, bot_username: donutSmpService.botUsername };
+  for (const user of db.users) {
+    user.minecraft_uuid ??= null;
+    user.minecraft_username ??= null;
+    user.minecraft_verified ??= false;
+    user.minecraft_verified_at ??= null;
+    user.player_tags ??= [];
+  }
+  return db;
+}
+async function readLocalDb() {
   try {
-    const db = JSON.parse(await fs.readFile(DATA_FILE, 'utf8'));
-    db.users ??= [];
-    db.sessions ??= [];
-    db.matches ??= [];
-    db.minecraft_accounts ??= [];
-    db.verification_codes ??= [];
-    db.wagers ??= [];
-    db.deposits ??= [];
-    db.audit_logs ??= [];
-    db.support_tickets ??= [];
-    db.bans ??= [];
-    db.bot_status ??= { last_heartbeat_at: null, bot_username: donutSmpService.botUsername };
-    for (const user of db.users) {
-      user.minecraft_uuid ??= null;
-      user.minecraft_username ??= null;
-      user.minecraft_verified ??= false;
-      user.minecraft_verified_at ??= null;
-      user.player_tags ??= [];
-    }
-    return db;
+    return normalizeDb(JSON.parse(await fs.readFile(DATA_FILE, 'utf8')));
   } catch (error) {
-    if (error.code === 'ENOENT') return { users: [], sessions: [], matches: [], minecraft_accounts: [], verification_codes: [], wagers: [], deposits: [], audit_logs: [], support_tickets: [], bans: [], bot_status: { last_heartbeat_at: null, bot_username: donutSmpService.botUsername } };
+    if (error.code === 'ENOENT') return emptyDb();
     throw new Error('Database unavailable.');
   }
 }
+const postgresStore = createPostgresStore({ connectionString: DATABASE_URL, loadFallback: readLocalDb });
+async function readDb() {
+  return normalizeDb(postgresStore ? await postgresStore.read() : await readLocalDb());
+}
 async function writeDb(db) {
+  if (postgresStore) return postgresStore.write(db);
   await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
   await fs.writeFile(DATA_FILE, JSON.stringify(db, null, 2), { mode: 0o600 });
 }
-// The MVP uses a JSON file instead of a transactional database. Serialize every
-// escrow reservation so two simultaneous requests cannot spend the same wallet.
+// Local JSON development is serialized in-process. PostgreSQL production uses a
+// row lock so simultaneous web instances cannot spend the same wallet twice.
 let escrowMutationQueue = Promise.resolve();
 function withEscrowMutation(work) {
+  if (postgresStore) return postgresStore.transaction(work);
   const pending = escrowMutationQueue.then(work, work);
   escrowMutationQueue = pending.catch(() => undefined);
   return pending;
@@ -401,6 +415,7 @@ async function handleDiscordCallback(request, response, url) {
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
   try {
+    if (request.method === 'GET' && url.pathname === '/health') return sendJson(response, 200, { status: 'ok', storage: postgresStore ? 'postgresql' : 'local-json' });
     if (request.method === 'GET' && url.pathname === '/') {
       if (await currentUser(request)) return redirect(response, '/dashboard');
       return serveFile(response, 'index.html', 'text/html; charset=utf-8');
@@ -984,4 +999,16 @@ const server = http.createServer(async (request, response) => {
     sendJson(response, 404, { error: 'Not found.' });
   } catch (error) { console.error(error); sendJson(response, 500, { error: 'Database or server failure.' }); }
 });
-server.listen(PORT, () => console.log(`DonutWagers running at http://localhost:${PORT}`));
+async function startServer() {
+  if (postgresStore) {
+    await postgresStore.initialize();
+    console.log('DonutWagers storage: PostgreSQL');
+  } else {
+    console.log('DonutWagers storage: local JSON (development only)');
+  }
+  server.listen(PORT, '0.0.0.0', () => console.log(`DonutWagers running at http://localhost:${PORT}`));
+}
+startServer().catch((error) => {
+  console.error(`DonutWagers could not start: ${error.message}`);
+  process.exitCode = 1;
+});

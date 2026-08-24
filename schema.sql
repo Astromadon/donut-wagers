@@ -17,6 +17,14 @@ CREATE TABLE users (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Runtime persistence used by the Node server. The JSON state is stored in a
+-- transactional PostgreSQL row and locked during every escrow mutation.
+CREATE TABLE IF NOT EXISTS donut_wagers_state (
+  id SMALLINT PRIMARY KEY CHECK (id = 1),
+  state JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
