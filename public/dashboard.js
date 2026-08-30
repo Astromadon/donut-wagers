@@ -4,6 +4,9 @@ const api = async (url, options) => { const r = await fetch(url, options); const
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
 let matchConfig = { tab: 'game', game: 'Crystal PvP', region: 'EU', firstTo: '5+2', lead: 0, amount: 1000000 };
 let currentUser = null;
+let openMatches = [];
+let activeMatchFilter = 'all';
+let activeStatusFilter = 'available';
 let walletTab = 'deposit';
 let walletTimer = null;
 let walletPoll = null;
@@ -18,6 +21,40 @@ function renderPlayerTags(tags, extraClass = '') {
   const validTags = Array.isArray(tags) ? tags.filter((tag) => String(tag || '').trim()) : [];
   if (!validTags.length) return '';
   return `<span class="player-tags ${extraClass}">${validTags.map((tag) => `<span class="player-tag ${tagStyle(tag)}">${escapeHtml(tag)}</span>`).join('')}</span>`;
+}
+function matchRegion(mode) {
+  const value = String(mode || '');
+  if (/\bNAE\b/i.test(value)) return 'NAE';
+  return 'EU';
+}
+function renderOpenMatches() {
+  const visible = activeStatusFilter === 'ongoing' ? [] : openMatches.filter((match) => {
+    if (activeMatchFilter === 'all') return true;
+    if (activeMatchFilter === 'EU' || activeMatchFilter === 'NAE') return matchRegion(match.game_mode) === activeMatchFilter;
+    return String(match.game_mode || '').toLowerCase().includes(activeMatchFilter.toLowerCase());
+  });
+  $('#available-filter-count').textContent = openMatches.length;
+  $('#list').innerHTML = visible.length ? visible.map((m) => {
+    const creator = escapeHtml(m.creator);
+    const minecraftName = m.creator_minecraft_username ? escapeHtml(m.creator_minecraft_username) : '';
+    const isCrystal = /crystal|cpvp/i.test(String(m.game_mode || ''));
+    const modeLabel = isCrystal ? 'Crystal PvP' : 'Sword Duel';
+    const region = matchRegion(m.game_mode);
+    const wager = Number(m.wager_amount || 0);
+    const prize = Math.floor(wager * 1.8);
+    const matchUrl = escapeHtml(m.match_url || `/matches/${m.id}`);
+    const playingAs = minecraftName
+      ? `<span class="match-minecraft">Playing as <b>${minecraftName}</b><button class="copy-minecraft" data-copy-minecraft="${minecraftName}" aria-label="Copy ${minecraftName}'s Minecraft username" title="Copy Minecraft username">⧉</button></span>`
+      : '<span class="match-minecraft muted">Minecraft pending</span>';
+    return `<article class="premium-match-card ${isCrystal ? 'mode-crystal' : 'mode-sword'}">
+      <div class="match-card-accent"></div>
+      <header><span class="mode-symbol">${isCrystal ? '◆' : '⚔'}</span><div><small>1V1 DUEL</small><h2>${modeLabel}</h2></div><span class="open-status"><i></i> Open</span></header>
+      <div class="match-host"><span class="host-avatar">${creator.slice(0,1) || '?'}</span><div><small>HOSTED BY</small><strong>${creator}</strong>${renderPlayerTags(m.creator_tags, 'match-tags')}${playingAs}</div></div>
+      <div class="match-specs"><div><small>REGION</small><b>◉ ${region}</b></div><div><small>FORMAT</small><b>1v1</b></div><div><small>RULES</small><b>${escapeHtml(m.rules || 'Standard')}</b></div></div>
+      <div class="match-economy"><div><small>ENTRY</small><strong>${wager.toLocaleString()}</strong></div><span>→</span><div><small>WINNER RECEIVES</small><strong>${prize.toLocaleString()}</strong></div></div>
+      <footer><a class="match-details" href="${matchUrl}">View details</a><button class="join-premium" data-join="${escapeHtml(m.match_code || m.id)}">Join match <span>→</span></button></footer>
+    </article>`;
+  }).join('') : `<div class="empty match-empty"><span>⚔</span><h2>No matching wagers found.</h2><p>Try another filter or create a new verified match.</p><button class="empty-create" type="button">Create a match</button></div>`;
 }
 function renderForm() {
   const form = $('#form');
@@ -48,18 +85,23 @@ async function load() {
   $('#admin-nav-label').hidden = !me.is_admin;
   if (!me.is_admin && $('#admin').classList.contains('active')) showView('matches');
   if (me.avatar_url) ['#avatar','#profile-avatar','#menu-avatar'].forEach(s => { const i=$(s); i.src=me.avatar_url; i.hidden=false; });
-  const matches = await api('/api/matches'); $('#count').textContent = matches.length;
-  $('#list').innerHTML = matches.length ? matches.map(m => {
-    const creator = escapeHtml(m.creator);
-    const minecraftName = m.creator_minecraft_username ? escapeHtml(m.creator_minecraft_username) : '';
-    const playingAs = minecraftName
-      ? `<small class="playing-as">Playing as <b>${minecraftName}</b><button class="copy-minecraft" data-copy-minecraft="${minecraftName}" aria-label="Copy ${minecraftName}'s Minecraft username" title="Copy Minecraft username">⧉</button></small>`
-      : `<small>${escapeHtml(m.game_mode)}</small>`;
-    return `<article class="match"><i>${creator.slice(0, 1) || '?'}</i><div class="match-player"><b>${creator}</b>${renderPlayerTags(m.creator_tags, 'match-tags')}${playingAs}</div><div class="amount"><small>WAGER</small><b>${Number(m.wager_amount).toLocaleString()}</b></div><a class="match-link" href="${escapeHtml(m.match_url || `/matches/${m.id}`)}">View</a><button class="orange" data-join="${m.match_code || m.id}">Join</button></article>`;
-  }).join('') : `<div class="empty">⚔<h2>No open matches.</h2><p>Create a verified wager to publish it here.</p></div>`;
+  openMatches = await api('/api/matches'); $('#count').textContent = openMatches.length; renderOpenMatches();
 }
 document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-view]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); document.querySelectorAll('.view').forEach(x=>x.classList.remove('active')); $('#'+b.dataset.view).classList.add('active'); if (b.dataset.view === 'admin') loadAdmin(); });
 $('#create').onclick = () => { matchConfig.tab='game'; document.querySelectorAll('[data-tab]').forEach(t=>t.classList.toggle('active',t.dataset.tab==='game')); renderForm(); $('#match-dialog').showModal(); };
+document.querySelectorAll('[data-match-filter]').forEach((button) => button.addEventListener('click', () => {
+  activeMatchFilter = button.dataset.matchFilter;
+  document.querySelectorAll('[data-match-filter]').forEach((item) => item.classList.toggle('active', item === button));
+  renderOpenMatches();
+}));
+document.querySelectorAll('[data-filter-type="status"]').forEach((button) => button.addEventListener('click', () => {
+  activeStatusFilter = button.dataset.filterValue;
+  document.querySelectorAll('[data-filter-type="status"]').forEach((item) => item.classList.toggle('active', item === button));
+  renderOpenMatches();
+}));
+$('#list').addEventListener('click', (event) => {
+  if (event.target.closest('.empty-create')) $('#create').click();
+});
 document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { matchConfig.tab=b.dataset.tab; document.querySelectorAll('[data-tab]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); renderForm(); });
 document.querySelectorAll('[data-close]').forEach(b => b.onclick = () => b.closest('dialog').close());
 $('#submit').onclick = async () => { if (matchConfig.tab !== 'amount') { const order=['game','settings','amount']; const n=order.indexOf(matchConfig.tab)+1; matchConfig.tab=order[n]; document.querySelector(`[data-tab="${matchConfig.tab}"]`).click(); return; } try { const match = await api('/api/matches',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({wager_amount:matchConfig.amount,game_mode:`${matchConfig.game} · 1v1 · ${matchConfig.region}`,rules:`First to ${matchConfig.firstTo}, lead ${matchConfig.lead}`})}); location.href = match.match_url || `/matches/${match.id}`; } catch(e) { toast(e.message); } };
