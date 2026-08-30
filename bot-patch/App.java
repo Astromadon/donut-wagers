@@ -19,6 +19,9 @@ import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
 import org.geysermc.mcprotocollib.protocol.data.game.chat.ChatTypeDecoration;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundPlayerChatPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundSystemChatPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.ServerboundChatCommandPacket;
+import org.geysermc.mcprotocollib.protocol.packet.login.clientbound.ClientboundCustomQueryPacket;
+import org.geysermc.mcprotocollib.protocol.packet.login.serverbound.ServerboundCustomQueryAnswerPacket;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -34,10 +37,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
@@ -50,6 +55,8 @@ public final class App {
     private static final Pattern PAYMENT_RECEIVED_PATTERN = Pattern.compile("^.*?(?:received|receive)\\s+(?:a\\s+)?(?:payment\\s+(?:of|for)\\s+)?\\$?\\s*([0-9][0-9,._]*[kKmMbB]?)(?:\\s+(?:coins?|money))?\\s+from\\s+([A-Za-z0-9_]{3,16}).*$", Pattern.CASE_INSENSITIVE);
     private record VerificationMessage(String minecraftUsername, String code) { }
     private record PaymentMessage(String minecraftUsername, long amount) { }
+    private record Withdrawal(String id, String minecraftUsername, long amount) { }
+    private record AuthenticatedMinecraftAccount(MinecraftProfile profile, String accessToken) { }
 
     public static void main(String[] args) throws Exception {
         System.out.println("========================================");
@@ -82,8 +89,9 @@ public final class App {
 
         JavaAuthManager authManager = JavaAuthManager.create(MinecraftAuth.createHttpClient())
                 .login(DeviceCodeMsaAuthService::new, deviceCodeConsumer);
-        MinecraftProfile profile = authManager.getMinecraftProfile().getUpToDate();
-        String accessToken = authManager.getMinecraftToken().getUpToDate().getToken();
+        AuthenticatedMinecraftAccount authenticatedAccount = refreshMinecraftAccount(authManager);
+        MinecraftProfile profile = authenticatedAccount.profile();
+        String accessToken = authenticatedAccount.accessToken();
         String botUsername = environment("DONUT_WAGERS_BOT_USERNAME", profile.getName());
         List<Pattern> paymentPatterns = paymentPatterns(botUsername);
 
@@ -106,6 +114,7 @@ public final class App {
                 thread.setDaemon(true);
                 return thread;
             });
+            AtomicBoolean withdrawalBusy = new AtomicBoolean(false);
 
             client.addListener(new SessionAdapter() {
                 @Override
@@ -113,11 +122,18 @@ public final class App {
                     System.out.println("Bot is online and waiting for private verification messages.");
                     forwardBotHeartbeat(backendClient, backendUrl, webhookSecret, botUsername, true);
                     heartbeat.scheduleAtFixedRate(() -> forwardBotHeartbeat(backendClient, backendUrl, webhookSecret, botUsername, false), 20, 20, TimeUnit.SECONDS);
+                    heartbeat.scheduleWithFixedDelay(() -> pollWithdrawal(backendClient, backendUrl, webhookSecret, client, withdrawalBusy), 5, 5, TimeUnit.SECONDS);
                 }
 
-                @Override
-                public void packetReceived(Session session, Packet packet) {
-                    if (packet instanceof ClientboundPlayerChatPacket chat) {
+            @Override
+            public void packetReceived(Session session, Packet packet) {
+                if (packet instanceof ClientboundCustomQueryPacket query) {
+                    if (debugChat) System.out.printf("Login custom query: channel=%s id=%d%n", query.getChannel(), query.getMessageId());
+                    session.send(new ServerboundCustomQueryAnswerPacket(query.getMessageId()));
+                    return;
+                }
+
+                if (packet instanceof ClientboundPlayerChatPacket chat) {
                         String message = chat.getContent().trim();
                         String sender = plainText(chat.getName()).trim();
                         String target = chat.getTargetName() == null ? "" : plainText(chat.getTargetName()).trim();
@@ -169,6 +185,32 @@ public final class App {
             System.out.println("Reconnecting to Donut SMP in 10 seconds…");
             Thread.sleep(10_000);
         }
+    }
+
+    private static AuthenticatedMinecraftAccount refreshMinecraftAccount(JavaAuthManager authManager) throws Exception {
+        Exception lastFailure = null;
+        for (int attempt = 1; attempt <= 6; attempt++) {
+            try {
+                MinecraftProfile profile = authManager.getMinecraftProfile().getUpToDate();
+                String accessToken = authManager.getMinecraftToken().getUpToDate().getToken();
+                return new AuthenticatedMinecraftAccount(profile, accessToken);
+            } catch (Exception error) {
+                lastFailure = error;
+                if (!isTemporaryMinecraftAuthFailure(error) || attempt == 6) throw error;
+                long delaySeconds = Math.min(30, attempt * 5L);
+                System.err.printf("Minecraft authentication service returned a temporary error. Retrying in %d seconds (%d/6).%n", delaySeconds, attempt);
+                Thread.sleep(delaySeconds * 1000L);
+            }
+        }
+        throw lastFailure;
+    }
+
+    private static boolean isTemporaryMinecraftAuthFailure(Throwable error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            String message = String.valueOf(current.getMessage()).toLowerCase(Locale.ROOT);
+            if (message.contains("500 internal server error") || message.contains("internal_server_error") || message.contains("status: 502") || message.contains("status: 503") || message.contains("status: 504")) return true;
+        }
+        return false;
     }
 
     private static void forwardVerification(HttpClient client, String backendUrl, String secret, String code, String minecraftUsername, String minecraftUuid) {
@@ -233,6 +275,71 @@ public final class App {
                         System.err.printf("Bot heartbeat rejected (HTTP %d): %s%n", response.statusCode(), response.body());
                     }
                 });
+    }
+
+    private static void pollWithdrawal(HttpClient client, String backendUrl, String secret, Session session, AtomicBoolean busy) {
+        if (!busy.compareAndSet(false, true)) return;
+        String endpoint = backendUrl.replaceAll("/+$", "") + "/api/wallet/withdrawals/next";
+        HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint))
+                .timeout(Duration.ofSeconds(15))
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + secret)
+                .POST(HttpRequest.BodyPublishers.ofString("{}", StandardCharsets.UTF_8))
+                .build();
+        client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).whenComplete((response, error) -> {
+            if (error != null) {
+                System.err.println("Unable to check withdrawal queue: " + error.getMessage());
+                busy.set(false);
+                return;
+            }
+            if (response.statusCode() == 204) { busy.set(false); return; }
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                System.err.printf("Withdrawal queue rejected (HTTP %d): %s%n", response.statusCode(), response.body());
+                busy.set(false);
+                return;
+            }
+            Withdrawal withdrawal = parseWithdrawal(response.body());
+            if (withdrawal == null) {
+                System.err.println("Withdrawal queue returned an invalid payout.");
+                busy.set(false);
+                return;
+            }
+            try {
+                session.send(new ServerboundChatCommandPacket("pay " + withdrawal.minecraftUsername() + " " + withdrawal.amount()));
+                System.out.printf("Sent withdrawal command for %,d to %s.%n", withdrawal.amount(), withdrawal.minecraftUsername());
+                forwardWithdrawalResult(client, backendUrl, secret, withdrawal.id(), true, null, busy);
+            } catch (Exception sendError) {
+                System.err.println("Unable to send withdrawal command: " + sendError.getMessage());
+                forwardWithdrawalResult(client, backendUrl, secret, withdrawal.id(), false, sendError.getMessage(), busy);
+            }
+        });
+    }
+
+    private static Withdrawal parseWithdrawal(String body) {
+        var id = Pattern.compile("\\\"id\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"").matcher(body);
+        var username = Pattern.compile("\\\"minecraft_username\\\"\\s*:\\s*\\\"([A-Za-z0-9_]{3,16})\\\"").matcher(body);
+        var amount = Pattern.compile("\\\"amount\\\"\\s*:\\s*(\\d+)").matcher(body);
+        if (!id.find() || !username.find() || !amount.find()) return null;
+        try { return new Withdrawal(id.group(1), username.group(1), Long.parseLong(amount.group(1))); }
+        catch (RuntimeException error) { return null; }
+    }
+
+    private static void forwardWithdrawalResult(HttpClient client, String backendUrl, String secret, String id, boolean success, String errorMessage, AtomicBoolean busy) {
+        String endpoint = backendUrl.replaceAll("/+$", "") + "/api/wallet/withdrawals/" + id + "/complete";
+        String safeError = errorMessage == null ? "" : errorMessage.replace("\\", "\\\\").replace("\"", "\\\"");
+        String payload = "{\"success\":" + success + (success ? "" : ",\"error\":\"" + safeError + "\"") + "}";
+        HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint))
+                .timeout(Duration.ofSeconds(15))
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + secret)
+                .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
+                .build();
+        client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).whenComplete((response, requestError) -> {
+            if (requestError != null) System.err.println("Unable to confirm withdrawal: " + requestError.getMessage());
+            else if (response.statusCode() < 200 || response.statusCode() >= 300) System.err.printf("Withdrawal completion rejected (HTTP %d): %s%n", response.statusCode(), response.body());
+            else System.out.println(success ? "Withdrawal marked complete." : "Failed withdrawal released.");
+            busy.set(false);
+        });
     }
 
     /**

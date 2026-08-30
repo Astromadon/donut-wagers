@@ -27,6 +27,15 @@ function matchRegion(mode) {
   if (/\bNAE\b/i.test(value)) return 'NAE';
   return 'EU';
 }
+function compactMode(match) {
+  return /crystal|cpvp/i.test(String(match.game_mode || '')) ? 'CPvP' : 'Sword';
+}
+function renderSidebarMatches(recentMatches = []) {
+  const live = openMatches.slice(0, 3);
+  $('#sidebar-live-matches').innerHTML = live.length ? live.map((match) => `<a class="sidebar-match-link" href="${escapeHtml(match.match_url || `/matches/${match.id}`)}"><span>${compactMode(match)}</span><small>${matchRegion(match.game_mode)} · ${Number(match.wager_amount || 0).toLocaleString()}</small><b>Join →</b></a>`).join('') : '';
+  const recent = recentMatches.filter((match) => !['OPEN','PLAYER_1_DEPOSIT_PENDING'].includes(match.status)).slice(0, 3);
+  $('#sidebar-recent-matches').innerHTML = recent.length ? recent.map((match) => `<a class="sidebar-recent-link" href="${escapeHtml(match.match_url || `/matches/${match.id}`)}"><i>◷</i><span>${compactMode(match)}<small>${escapeHtml(String(match.status || 'played').replaceAll('_',' '))}</small></span></a>`).join('') : '<span class="sidebar-match-empty">No recent matches</span>';
+}
 function renderOpenMatches() {
   const visible = activeStatusFilter === 'ongoing' ? [] : openMatches.filter((match) => {
     if (activeMatchFilter === 'all') return true;
@@ -85,7 +94,8 @@ async function load() {
   $('#admin-nav-label').hidden = !me.is_admin;
   if (!me.is_admin && $('#admin').classList.contains('active')) showView('matches');
   if (me.avatar_url) ['#avatar','#profile-avatar','#menu-avatar'].forEach(s => { const i=$(s); i.src=me.avatar_url; i.hidden=false; });
-  openMatches = await api('/api/matches'); $('#count').textContent = openMatches.length; renderOpenMatches();
+  const [matches, recentMatches] = await Promise.all([api('/api/matches'), api('/api/me/matches').catch(() => [])]);
+  openMatches = matches; $('#count').textContent = openMatches.length; renderOpenMatches(); renderSidebarMatches(recentMatches);
 }
 document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-view]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); document.querySelectorAll('.view').forEach(x=>x.classList.remove('active')); $('#'+b.dataset.view).classList.add('active'); if (b.dataset.view === 'admin') loadAdmin(); });
 $('#create').onclick = () => { matchConfig.tab='game'; document.querySelectorAll('[data-tab]').forEach(t=>t.classList.toggle('active',t.dataset.tab==='game')); renderForm(); $('#match-dialog').showModal(); };
@@ -263,9 +273,39 @@ async function copyWalletText(value) {
   document.execCommand('copy');
   input.remove();
 }
-function renderWithdraw() {
+function showWithdrawal(withdrawal) {
   stopWalletTimers();
-  $('#wallet-dialog-content').innerHTML = `<div class="withdraw-note"><div class="wallet-icon">⇧</div><h3>Withdrawals are not available yet</h3><p>Withdrawals will only open after the DonutWagersBot can securely confirm in-game payouts. Your available balance remains visible and safe in the wallet.</p></div>`;
+  const complete = withdrawal.status === 'completed';
+  const failed = withdrawal.status === 'failed';
+  $('#wallet-dialog-content').innerHTML = `<div class="wallet-confirmed withdrawal-state ${failed ? 'failed' : ''}"><div class="wallet-icon">${complete ? '✓' : failed ? '!' : '⇧'}</div><h3>${complete ? 'Withdrawal complete' : failed ? 'Withdrawal failed' : 'Sending your payout'}</h3><p>${complete ? `<b>${formatWalletAmount(withdrawal.amount)}</b> was paid to <b>${escapeHtml(withdrawal.minecraft_username)}</b>.` : failed ? escapeHtml(withdrawal.error || 'The payout could not be sent. Your balance was released.') : `DonutWagersBot is sending <b>${formatWalletAmount(withdrawal.amount)}</b> to <b>${escapeHtml(withdrawal.minecraft_username)}</b>. Keep the bot online.`}</p>${complete || failed ? '<button id="withdrawal-done" class="purple">Done</button>' : '<div class="withdrawal-pulse"><i></i> Processing automatically</div>'}</div>`;
+  if (complete || failed) {
+    $('#withdrawal-done').onclick = () => { $('#wallet-dialog').close(); load(); };
+  } else {
+    walletPoll = setInterval(async () => {
+      try {
+        const response = await api('/api/wallet/withdrawals/current');
+        if (response.withdrawal && response.withdrawal.status !== withdrawal.status) showWithdrawal(response.withdrawal);
+      } catch { /* Retry while the dialog is open. */ }
+    }, 4000);
+  }
+}
+async function renderWithdraw(message = '') {
+  stopWalletTimers();
+  try {
+    const response = await api('/api/wallet/withdrawals/current');
+    if (response.withdrawal && ['pending','processing'].includes(response.withdrawal.status)) return showWithdrawal(response.withdrawal);
+  } catch { /* The form below will display any new request error. */ }
+  const player = currentUser?.minecraft_username ? escapeHtml(currentUser.minecraft_username) : 'Minecraft verification required';
+  $('#wallet-dialog-content').innerHTML = `<div class="wallet-deposit-form withdrawal-form"><p class="wallet-hint">Minimum withdrawal is 100k. Payouts are sent automatically by DonutWagersBot.</p>${message ? `<p class="wallet-error">${escapeHtml(message)}</p>` : ''}<label class="label" for="withdrawal-amount">AMOUNT TO WITHDRAW <small>e.g. 1m · 500k</small></label><input id="withdrawal-amount" class="amount wallet-amount" inputmode="decimal" autocomplete="off" placeholder="1m"><p class="wallet-from">Paying to <b>${player}</b></p><button id="start-withdrawal" class="purple" ${currentUser?.minecraft_verified && walletBotOnline ? '' : 'disabled'}>Withdraw to Minecraft</button></div>`;
+  $('#start-withdrawal').onclick = async () => {
+    const amount = parseWalletAmount($('#withdrawal-amount').value);
+    if (!amount) return renderWithdraw('Enter an amount such as 1m or 500k.');
+    const button = $('#start-withdrawal'); button.disabled = true; button.textContent = 'Creating withdrawal…';
+    try {
+      const result = await api('/api/wallet/withdrawals', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amount }) });
+      showWithdrawal(result.withdrawal);
+    } catch (error) { renderWithdraw(error.message); }
+  };
 }
 function renderDepositForm(message = '') {
   stopWalletTimers();

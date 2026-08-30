@@ -35,6 +35,7 @@
       <nav>
         <small>COMPETE</small>
         <button class="active" data-view="matches">⚔ Matches</button>
+        <div id="sidebar-live-matches" class="sidebar-match-stack"></div>
         <button data-view="snipes">◉ Live Snipes</button>
         <button data-view="leaderboard">♜ Leaderboard</button>
         <small>ACCOUNT</small>
@@ -45,6 +46,8 @@
         <small>INFO</small>
         <a href="/how-it-works">◇ How it works</a>
         <a href="/rules">⚙ Rules</a>
+        <small>RECENTLY PLAYED</small>
+        <div id="sidebar-recent-matches" class="sidebar-match-stack"><span class="sidebar-match-empty">No recent matches</span></div>
       </nav>
       <form method="post" action="/auth/logout"><button class="logout">Log out</button></form>
     </aside>

@@ -42,7 +42,7 @@ function loadEnvFile() {
 }
 
 function emptyDb() {
-  return { users: [], sessions: [], matches: [], minecraft_accounts: [], verification_codes: [], wagers: [], deposits: [], audit_logs: [], support_tickets: [], bans: [], bot_status: { last_heartbeat_at: null, bot_username: donutSmpService.botUsername } };
+  return { users: [], sessions: [], matches: [], minecraft_accounts: [], verification_codes: [], wagers: [], deposits: [], withdrawals: [], audit_logs: [], support_tickets: [], bans: [], bot_status: { last_heartbeat_at: null, bot_username: donutSmpService.botUsername } };
 }
 function normalizeDb(db) {
   db ??= emptyDb();
@@ -53,6 +53,7 @@ function normalizeDb(db) {
   db.verification_codes ??= [];
   db.wagers ??= [];
   db.deposits ??= [];
+  db.withdrawals ??= [];
   db.audit_logs ??= [];
   db.support_tickets ??= [];
   db.bans ??= [];
@@ -230,6 +231,10 @@ function publicWalletDeposit(deposit) {
     expires_at: deposit.expires_at,
     verified_at: deposit.verified_at || null,
   };
+}
+function publicWithdrawal(withdrawal) {
+  if (!withdrawal) return null;
+  return { id: withdrawal.id, status: withdrawal.status, amount: withdrawal.amount, minecraft_username: withdrawal.minecraft_username, created_at: withdrawal.created_at, completed_at: withdrawal.completed_at || null, error: withdrawal.error || null };
 }
 function avatarUrl(user) { return user.discord_avatar ? `https://cdn.discordapp.com/avatars/${user.discord_id}/${user.discord_avatar}.png?size=128` : null; }
 function isAdmin(user) { return Boolean(ADMIN_DISCORD_ID && user?.discord_id && safeEqual(String(user.discord_id), ADMIN_DISCORD_ID)); }
@@ -749,6 +754,77 @@ const server = http.createServer(async (request, response) => {
       await writeDb(db);
       return sendJson(response, 200, { disconnected: true });
     }
+    if (request.method === 'GET' && url.pathname === '/api/wallet/withdrawals/current') {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      const db = await readDb();
+      const withdrawal = db.withdrawals.filter((item) => item.user_id === user.id).sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+      return sendJson(response, 200, { withdrawal: publicWithdrawal(withdrawal) });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/wallet/withdrawals') {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      const { amount } = await readJson(request);
+      const numericAmount = Number(amount);
+      if (!Number.isSafeInteger(numericAmount) || numericAmount < 100_000 || numericAmount > 1_000_000_000_000) return sendJson(response, 400, { error: 'Enter a whole-number withdrawal from 100,000 to 1,000,000,000,000.' });
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const storedUser = db.users.find((item) => item.id === user.id);
+        const account = db.minecraft_accounts.find((item) => item.user_id === user.id && item.verified);
+        if (!account) return { status: 403, error: 'Verify your Minecraft account before withdrawing.' };
+        if (botStatus(db).status !== 'ONLINE') return { status: 503, error: 'DonutWagersBot is offline. Withdrawals are temporarily unavailable.' };
+        if (db.withdrawals.some((item) => item.user_id === user.id && ['pending','processing'].includes(item.status))) return { status: 409, error: 'You already have a withdrawal being processed.' };
+        if (availableBalance(storedUser) < numericAmount) return { status: 409, error: 'Insufficient available DonutWagers balance.' };
+        storedUser.locked_balance = money(storedUser.locked_balance) + numericAmount;
+        const withdrawal = { id: crypto.randomUUID(), user_id: user.id, minecraft_uuid: account.minecraft_uuid || null, minecraft_username: account.minecraft_username, amount: numericAmount, status: 'pending', claimed_at: null, completed_at: null, error: null, created_at: new Date().toISOString() };
+        db.withdrawals.push(withdrawal);
+        audit(db, user.id, 'wallet_withdrawal_requested', { withdrawal_id: withdrawal.id, amount: numericAmount, minecraft_username: account.minecraft_username });
+        await writeDb(db);
+        return { status: 201, withdrawal: publicWithdrawal(withdrawal), balance: availableBalance(storedUser) };
+      });
+      return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : outcome);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/wallet/withdrawals/next') {
+      if (!BOT_WEBHOOK_SECRET || !safeEqual(getBotWebhookSecret(request), BOT_WEBHOOK_SECRET)) return sendJson(response, 401, { error: 'Unauthorized bot request.' });
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const now = Date.now();
+        const withdrawal = db.withdrawals.find((item) => item.status === 'pending' || (item.status === 'processing' && now - new Date(item.claimed_at || 0).getTime() > 60_000));
+        if (!withdrawal) return { status: 204 };
+        withdrawal.status = 'processing';
+        withdrawal.claimed_at = new Date().toISOString();
+        await writeDb(db);
+        return { status: 200, withdrawal: publicWithdrawal(withdrawal) };
+      });
+      return outcome.status === 204 ? (response.writeHead(204), response.end()) : sendJson(response, outcome.status, { withdrawal: outcome.withdrawal });
+    }
+    if (request.method === 'POST' && /^\/api\/wallet\/withdrawals\/[^/]+\/complete$/.test(url.pathname)) {
+      if (!BOT_WEBHOOK_SECRET || !safeEqual(getBotWebhookSecret(request), BOT_WEBHOOK_SECRET)) return sendJson(response, 401, { error: 'Unauthorized bot request.' });
+      const withdrawalId = decodeURIComponent(url.pathname.split('/')[4]);
+      const { success, error } = await readJson(request);
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const withdrawal = db.withdrawals.find((item) => item.id === withdrawalId);
+        if (!withdrawal) return { status: 404, error: 'Withdrawal not found.' };
+        if (!['pending','processing'].includes(withdrawal.status)) return { status: 200, withdrawal: publicWithdrawal(withdrawal) };
+        const storedUser = db.users.find((item) => item.id === withdrawal.user_id);
+        if (!storedUser) return { status: 404, error: 'Withdrawal account not found.' };
+        storedUser.locked_balance = Math.max(0, money(storedUser.locked_balance) - money(withdrawal.amount));
+        withdrawal.completed_at = new Date().toISOString();
+        if (success === true) {
+          storedUser.balance = Math.max(0, money(storedUser.balance) - money(withdrawal.amount));
+          withdrawal.status = 'completed';
+          audit(db, storedUser.id, 'wallet_withdrawal_completed', { withdrawal_id: withdrawal.id, amount: withdrawal.amount });
+        } else {
+          withdrawal.status = 'failed';
+          withdrawal.error = String(error || 'The bot could not send this payout.').slice(0, 300);
+          audit(db, storedUser.id, 'wallet_withdrawal_failed', { withdrawal_id: withdrawal.id, error: withdrawal.error });
+        }
+        await writeDb(db);
+        return { status: 200, withdrawal: publicWithdrawal(withdrawal), balance: availableBalance(storedUser) };
+      });
+      return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : outcome);
+    }
     if (request.method === 'GET' && url.pathname === '/api/wallet/deposits/current') {
       const user = await currentUser(request);
       if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
@@ -830,6 +906,17 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'GET' && url.pathname === '/api/matches') {
       const db = await readDb();
       return sendJson(response, 200, db.matches.filter((match) => ['OPEN', 'PLAYER_1_DEPOSIT_PENDING'].includes(match.status)).map((match) => publicMatch(match, db.users)));
+    }
+    if (request.method === 'GET' && url.pathname === '/api/me/matches') {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      const db = await readDb();
+      const matches = db.matches
+        .filter((match) => match.creator_id === user.id || match.opponent_id === user.id)
+        .sort((a, b) => new Date(b.settled_at || b.cancelled_at || b.created_at) - new Date(a.settled_at || a.cancelled_at || a.created_at))
+        .slice(0, 8)
+        .map((match) => publicMatch(match, db.users));
+      return sendJson(response, 200, matches);
     }
     if (request.method === 'GET' && /^\/api\/matches\/[^/]+$/.test(url.pathname)) {
       const db = await readDb();
