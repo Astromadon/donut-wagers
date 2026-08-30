@@ -86,6 +86,21 @@ function render(match, viewer) {
   $('#rule-mode').textContent = game(match);
   $('#match-rules').textContent = match.rules || 'First to 5, win by two.';
   $('#players').innerHTML = `${playerCard('CREATING TEAM', match.creator, match.creator_minecraft_username, match.creator_tags, false)}<div class="player-vs">VS</div>${playerCard('JOINING TEAM', match.opponent, match.opponent_minecraft_username, match.opponent_tags, !match.opponent)}`;
+  const opponentMinecraft = viewer?.id === match.creator_id
+    ? match.opponent_minecraft_username
+    : viewer?.id === match.opponent_id
+      ? match.creator_minecraft_username
+      : match.opponent_minecraft_username || null;
+  const duelCommand = opponentMinecraft ? `/duel ${opponentMinecraft}` : '';
+  $('#duel-command').textContent = duelCommand || 'Waiting for verified opponent…';
+  $('#copy-duel-command').disabled = !duelCommand;
+  $('#copy-duel-server').onclick = async () => {
+    try { await copyText('mcpvp.club'); showToast('Server address copied: mcpvp.club'); } catch { showToast('Could not copy the server address.'); }
+  };
+  $('#copy-duel-command').onclick = async () => {
+    if (!duelCommand) return;
+    try { await copyText(duelCommand); showToast(`Copied ${duelCommand}`); } catch { showToast('Could not copy the duel command.'); }
+  };
   activateTimeline(match);
   $('#copy-match-link').onclick = async () => {
     try { await copyText(match.match_url); showToast('Match link copied.'); } catch { showToast('Could not copy the match link.'); }

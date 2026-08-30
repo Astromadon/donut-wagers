@@ -19,6 +19,7 @@ const ADMIN_DISCORD_ID = String(process.env.DONUT_WAGERS_ADMIN_DISCORD_ID || '')
 const APP_BASE_URL = (process.env.APP_BASE_URL || `http://localhost:${PORT}`).replace(/\/+$/, '');
 const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const SESSION_MAX_AGE_SECONDS = 180 * 24 * 60 * 60;
 const ROOT = __dirname;
 const DATA_FILE = path.join(ROOT, 'data', 'db.json');
 const donutSmpService = new DonutWagersBotService({ apiUrl: process.env.DONUT_SMP_API_URL, apiKey: process.env.DONUT_SMP_API_KEY, botUsername: process.env.DONUT_WAGERS_BOT_USERNAME });
@@ -402,9 +403,9 @@ async function handleDiscordCallback(request, response, url) {
     }
     const sessionId = crypto.randomBytes(32).toString('base64url');
     db.sessions = db.sessions.filter((item) => new Date(item.expires_at) > new Date());
-    db.sessions.push({ id: sessionId, user_id: user.id, expires_at: new Date(Date.now() + 30 * 86400000).toISOString() });
+    db.sessions.push({ id: sessionId, user_id: user.id, expires_at: new Date(Date.now() + SESSION_MAX_AGE_SECONDS * 1000).toISOString() });
     await writeDb(db);
-    appendCookie(response, 'dw_session', sessionId, { maxAge: 30 * 86400 });
+    appendCookie(response, 'dw_session', sessionId, { maxAge: SESSION_MAX_AGE_SECONDS });
     return redirect(response, '/dashboard');
   } catch (error) {
     console.error('Discord OAuth/database error:', error.message);
@@ -657,7 +658,7 @@ const server = http.createServer(async (request, response) => {
       if (verifiedAccount) return sendJson(response, 409, { error: `This DonutWagers account is already verified as ${verifiedAccount.minecraft_username}. Disconnect it before verifying another account.` });
       const normalizedUsername = normalizeMinecraftUsername(username);
       const existingAccount = db.minecraft_accounts.find((item) => normalizeMinecraftUsername(item.minecraft_username) === normalizedUsername && item.user_id !== user.id);
-      if (existingAccount) return sendJson(response, 409, { error: 'That Minecraft account is already linked.' });
+      if (existingAccount) return sendJson(response, 409, { error: 'That Minecraft account is already verified by another DonutWagers account.' });
       const recentRequests = db.verification_codes.filter((item) => item.user_id === user.id && Date.now() - new Date(item.created_at).getTime() < 10 * 60 * 1000);
       if (recentRequests.length >= 5) return sendJson(response, 429, { error: 'Too many verification codes were requested. Wait 10 minutes and try again.' });
       let code;
@@ -693,7 +694,7 @@ const server = http.createServer(async (request, response) => {
       const expectedUsername = record.minecraft_username_normalized || normalizeMinecraftUsername(record.minecraft_username);
       if (normalizeMinecraftUsername(senderUsername) !== expectedUsername) return sendJson(response, 403, { error: 'The Minecraft account that sent this code does not match the username submitted on the website.' });
       const other = db.minecraft_accounts.find((item) => (normalizeMinecraftUsername(item.minecraft_username) === expectedUsername || (senderUuid && item.minecraft_uuid === senderUuid)) && item.user_id !== record.user_id);
-      if (other) return sendJson(response, 409, { error: 'That Minecraft account is already linked to another DonutWagers account.' });
+      if (other) return sendJson(response, 409, { error: 'That Minecraft account is already verified by another DonutWagers account.' });
       record.used = true;
       record.verified = true;
       const now = new Date().toISOString();

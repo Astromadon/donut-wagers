@@ -21,7 +21,7 @@ if ([string]::IsNullOrWhiteSpace($sharedSecret)) {
   throw 'DONUT_WAGERS_BOT_WEBHOOK_SECRET is empty.'
 }
 
-$env:DONUT_WAGERS_API_URL = 'http://localhost:3000'
+$env:DONUT_WAGERS_API_URL = 'https://donut-wagers.up.railway.app'
 $env:DONUT_WAGERS_BOT_WEBHOOK_SECRET = $sharedSecret
 $env:DONUT_WAGERS_BOT_USERNAME = 'DonutWagersBot'
 $env:DONUT_WAGERS_DEBUG_CHAT = 'true'
@@ -31,16 +31,6 @@ Write-Host 'Wait until it says: Bot is online and waiting for private verificati
 Write-Host 'Then wait for: DonutWagers website connection confirmed.' -ForegroundColor Yellow
 Set-Location $botRoot
 
-# Prefer an already-installed Gradle distribution. This avoids a stale wrapper
-# lock from blocking a bot restart; fall back to the project wrapper if needed.
-$gradleHome = Join-Path $env:USERPROFILE '.gradle\wrapper\dists'
-$gradleCommand = if (Test-Path -LiteralPath $gradleHome) {
-  Get-ChildItem -LiteralPath $gradleHome -Filter 'gradle.bat' -File -Recurse -ErrorAction SilentlyContinue |
-    Sort-Object LastWriteTime -Descending |
-    Select-Object -First 1
-}
-if ($gradleCommand) {
-  & $gradleCommand.FullName --no-daemon run
-} else {
-  & .\gradlew.bat --no-daemon run
-}
+# Use the wrapper committed with the bot project so the Gradle version and
+# native libraries always match this build.
+& .\gradlew.bat --no-daemon run
