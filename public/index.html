@@ -1,1 +1,57 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DonutWagers | DonutSMP Duels</title><link rel="stylesheet" href="/landing.css"></head><body><header><a class="brand" href="/"><span>DW</span> DONUTWAGERS</a><nav><a href="/how-it-works">How it works</a><a href="/rules">Rules</a><a href="/dashboard" class="outline">Open dashboard</a></nav></header><main><section class="hero"><div class="live"><i></i> <b id="stat-players">0</b> registered players</div><h1>Donut<span>Wagers</span></h1><h2>Play <em>Duels</em>, Win <strong>Respect</strong></h2><p>A secure DonutSMP duel hub. Create a 1v1, deposit to escrow, and fight for the pot.</p><div class="metrics"><span><i>◉</i> <b id="stat-settled">0</b> settled matches</span><span><i>◇</i> <b id="stat-escrow">0</b> verified escrowed</span><span><i>◌</i> <b id="stat-open">0</b> open matches</span></div><div class="actions"><a href="/dashboard" class="primary">⚔ Play now <b>→</b></a><a href="/auth/discord" class="secondary">◉ Continue with Discord</a></div><p class="integration" id="integration">Loading live platform status…</p></section><section class="games"><h2>Select your <em>duel.</em></h2><p>Real listings are created only by authenticated players.</p><div class="game-grid"><a href="/dashboard" class="game cpvp"><small>DONUTSMP · 1V1</small><b>CPVP</b><span>Crystal PvP <i>→</i></span></a><a href="/dashboard" class="game sword"><small>DONUTSMP · 1V1</small><b>SWORD</b><span>Sword Duel <i>→</i></span></a></div></section><section class="trust"><article><b>Verified identity</b><span>Discord accounts are saved securely.</span></article><article><b>Server-side escrow</b><span>Deposits count only after transaction verification.</span></article><article><b>Clear rules</b><span>First-to, round lead, region, and stake are set before play.</span></article></section></main><footer>DONUTWAGERS · UNOFFICIAL COMMUNITY PROJECT · NOT AFFILIATED WITH DONUTSMP</footer><script src="/landing.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#080b08">
+  <meta name="description" content="DonutWagers is a competitive DonutSMP match platform with verified players, protected wagers, and transparent results.">
+  <title>DonutWagers — Competitive DonutSMP Matches</title>
+  <link rel="stylesheet" href="/landing.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="DonutWagers home"><span class="brand-mark">DW</span><span class="brand-copy">DONUT<span>WAGERS</span></span></a>
+    <nav aria-label="Primary navigation"><a href="/dashboard">Matches</a><a href="/how-it-works">How it works</a><a href="/rules">Rules</a></nav>
+    <a class="header-cta" href="/dashboard">Open app <span aria-hidden="true">↗</span></a>
+  </header>
+  <main>
+    <section class="hero">
+      <div class="hero-grid" aria-hidden="true"></div><div class="hero-glow hero-glow-one" aria-hidden="true"></div><div class="hero-glow hero-glow-two" aria-hidden="true"></div>
+      <div class="hero-content">
+        <div class="status-pill"><span></span><strong id="stat-players">0</strong> players registered</div>
+        <p class="eyebrow">Competitive DonutSMP matches</p>
+        <h1>Put your skill<br><span>on the line.</span></h1>
+        <p class="hero-copy">Create verified Minecraft wagers, compete under clear rules, and build a record the community can trust.</p>
+        <div class="hero-actions"><a class="primary-button" href="/dashboard">Find a match <span aria-hidden="true">→</span></a><a class="secondary-button" href="/auth/discord">Continue with Discord</a></div>
+        <div class="live-stats" aria-label="Live platform statistics">
+          <article><span class="metric-icon">✓</span><div><strong id="stat-settled">0</strong><small>Settled matches</small></div></article>
+          <article><span class="metric-icon">◇</span><div><strong id="stat-escrow">0</strong><small>Paid to winners</small></div></article>
+          <article><span class="metric-icon live">●</span><div><strong id="stat-open">0</strong><small>Open matches</small></div></article>
+        </div>
+      </div>
+    </section>
+    <section class="games-section" aria-labelledby="games-title">
+      <div class="section-heading"><div><p class="eyebrow">Choose your discipline</p><h2 id="games-title">Built for serious duels.</h2></div><p>Focused modes, transparent match terms, and a profile that records every result.</p></div>
+      <div class="game-grid">
+        <a class="game-card crystal" href="/dashboard?mode=CPvP"><div class="card-top"><span>01</span><span class="availability">Available now</span></div><div class="game-monogram">CP</div><div><p>Crystal PvP</p><h3>Fast decisions.<br>High stakes.</h3></div><span class="card-link">Browse CPvP matches →</span></a>
+        <a class="game-card sword" href="/dashboard?mode=Sword"><div class="card-top"><span>02</span><span class="availability">Available now</span></div><div class="game-monogram">SW</div><div><p>Sword PvP</p><h3>Clean mechanics.<br>Pure pressure.</h3></div><span class="card-link">Browse Sword matches →</span></a>
+      </div>
+    </section>
+    <section class="process-section" aria-labelledby="process-title">
+      <div class="section-heading compact"><div><p class="eyebrow">A fairer match flow</p><h2 id="process-title">From lobby to payout.</h2></div></div>
+      <div class="process-grid">
+        <article><span>01</span><h3>Verify</h3><p>Connect Discord and prove ownership of your Minecraft account.</p></article>
+        <article><span>02</span><h3>Fund</h3><p>Deposit through the verified DonutWagers bot before entering a wager.</p></article>
+        <article><span>03</span><h3>Compete</h3><p>Create or join a match with the mode, region, and rules shown upfront.</p></article>
+        <article><span>04</span><h3>Settle</h3><p>Submit the result. Disputes are escalated to staff with match records intact.</p></article>
+      </div>
+    </section>
+    <section class="trust-section">
+      <div><p class="eyebrow">Designed around accountability</p><h2>Every match leaves a record.</h2><p>Verified identities, locked wager balances, visible rules, unique match links, and staff review give both players a clear paper trail.</p></div>
+      <div class="trust-card"><div><span class="trust-dot"></span><strong id="integration">Checking platform status…</strong></div><ul><li>Verified Minecraft identity</li><li>Protected wager balance</li><li>Dispute and staff workflow</li></ul><a href="/how-it-works">See how protection works →</a></div>
+    </section>
+  </main>
+  <footer><a class="brand footer-brand" href="/"><span class="brand-mark">DW</span><span class="brand-copy">DONUT<span>WAGERS</span></span></a><p>Independent competitive platform for the DonutSMP community.</p><div><a href="/rules">Rules</a><a href="/how-it-works">How it works</a><a href="/dashboard">Launch app</a></div></footer>
+  <script src="/landing.js" defer></script>
+</body>
+</html>
