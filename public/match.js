@@ -76,13 +76,13 @@ function activateTimeline(match) {
 function render(match, viewer) {
   document.title = `${game(match)} · DonutWagers`;
   $('#match-title').textContent = `1v1 ${game(match)}`;
-  $('#match-created').textContent = `Match ${match.match_code} · Created ${new Date(match.created_at).toLocaleString()}`;
+  $('#match-created').textContent = match.tournament_id ? `${match.tournament_name} · Round ${match.tournament_round} · Match ${match.match_code}` : `Match ${match.match_code} · Created ${new Date(match.created_at).toLocaleString()}`;
   $('#match-status').textContent = statusLabel(match);
   $('#fact-game').textContent = game(match);
   $('#fact-region').textContent = region(match);
   $('#fact-first-to').textContent = firstTo(match);
-  $('#fact-entry').textContent = Number(match.wager_amount || 0).toLocaleString();
-  $('#fact-prize').textContent = (Number(match.wager_amount || 0) * 1.8).toLocaleString();
+  $('#fact-entry').textContent = match.tournament_id ? 'FREE' : Number(match.wager_amount || 0).toLocaleString();
+  $('#fact-prize').textContent = match.tournament_id ? Number(match.tournament_prize || 0).toLocaleString() : (Number(match.wager_amount || 0) * 1.8).toLocaleString();
   $('#rule-mode').textContent = game(match);
   $('#match-rules').textContent = match.rules || 'First to 5, win by two.';
   $('#players').innerHTML = `${playerCard('CREATING TEAM', match.creator, match.creator_minecraft_username, match.creator_tags, false)}<div class="player-vs">VS</div>${playerCard('JOINING TEAM', match.opponent, match.opponent_minecraft_username, match.opponent_tags, !match.opponent)}`;
@@ -119,7 +119,7 @@ function render(match, viewer) {
   const cancelButton = $('#cancel-match');
   const isParticipant = Boolean(viewer && [match.creator_id, match.opponent_id].includes(viewer.id));
   const isOpenCreator = isParticipant && viewer.id === match.creator_id && ['OPEN', 'PLAYER_1_DEPOSIT_PENDING'].includes(match.status);
-  const canVoteToCancel = isParticipant && ['IN_PROGRESS', 'DISPUTED'].includes(match.status);
+  const canVoteToCancel = isParticipant && !match.tournament_id && ['IN_PROGRESS', 'DISPUTED'].includes(match.status);
   cancelButton.hidden = !isOpenCreator && !canVoteToCancel;
   if (isOpenCreator) {
     cancelButton.textContent = 'Cancel Match';

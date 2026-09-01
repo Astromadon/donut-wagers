@@ -24,7 +24,7 @@ if (IS_PRODUCTION && !DATABASE_URL) {
 }
 const SESSION_MAX_AGE_SECONDS = 180 * 24 * 60 * 60;
 const ROOT = __dirname;
-const DATA_FILE = path.join(ROOT, 'data', 'db.json');
+const DATA_FILE = process.env.DONUTWAGERS_DATA_FILE ? path.resolve(process.env.DONUTWAGERS_DATA_FILE) : path.join(ROOT, 'data', 'db.json');
 const donutSmpService = new DonutWagersBotService({ apiUrl: process.env.DONUT_SMP_API_URL, apiKey: process.env.DONUT_SMP_API_KEY, botUsername: process.env.DONUT_WAGERS_BOT_USERNAME });
 const discordTicketService = new DiscordTicketService({
   botToken: process.env.DISCORD_BOT_TOKEN,
@@ -151,6 +151,11 @@ function publicMatch(match, users) {
     winner: match.winner_id ? users.find((user) => user.id === match.winner_id)?.discord_username || null : null,
     result_state: match.result_state || null,
     payout_amount: match.payout_amount || null,
+    tournament_id: match.tournament_id || null,
+    tournament_round: match.tournament_round || null,
+    tournament_slot: match.tournament_slot ?? null,
+    tournament_name: match.tournament_name || null,
+    tournament_prize: match.tournament_prize || null,
     cancellation_vote_count: Array.isArray(match.cancellation_votes) ? match.cancellation_votes.length : 0,
     cancelled_at: match.cancelled_at || null,
     created_at: match.created_at,
@@ -167,6 +172,64 @@ function adminMatch(match, users) {
     settled_at: match.settled_at || null,
     platform_fee: match.platform_fee || null,
   };
+}
+function tournamentStandings(tournament, db) {
+  const registrations = Array.isArray(tournament.registrations) ? tournament.registrations : [];
+  const startedAt = tournament.started_at ? new Date(tournament.started_at).getTime() : 0;
+  const endedAt = tournament.ended_at ? new Date(tournament.ended_at).getTime() : Infinity;
+  const registeredIds = new Set(registrations.map((entry) => entry.user_id));
+  const rows = registrations.map((entry) => ({ user_id: entry.user_id, wins: 0, losses: 0, points: 0 }));
+  const byId = new Map(rows.map((row) => [row.user_id, row]));
+  if (tournament.format === 'LEADERBOARD' && startedAt) {
+    for (const match of db.matches) {
+      const settledAt = new Date(match.settled_at || 0).getTime();
+      if (match.status !== 'COMPLETED' || settledAt < startedAt || settledAt > endedAt || !registeredIds.has(match.creator_id) || !registeredIds.has(match.opponent_id)) continue;
+      const loserId = match.winner_id === match.creator_id ? match.opponent_id : match.creator_id;
+      byId.get(match.winner_id).wins += 1;
+      byId.get(match.winner_id).points += Number(tournament.points_per_win || 3);
+      byId.get(loserId).losses += 1;
+    }
+  } else {
+    for (const match of db.matches.filter((item) => item.tournament_id === tournament.id && item.status === 'COMPLETED')) {
+      const loserId = match.winner_id === match.creator_id ? match.opponent_id : match.creator_id;
+      if (byId.has(match.winner_id)) { byId.get(match.winner_id).wins += 1; byId.get(match.winner_id).points += 3; }
+      if (byId.has(loserId)) byId.get(loserId).losses += 1;
+    }
+  }
+  return rows.map((row) => {
+    const player = db.users.find((candidate) => candidate.id === row.user_id);
+    return { ...row, username: player?.discord_username || 'Unknown', minecraft_username: player?.minecraft_verified ? player.minecraft_username : null };
+  }).sort((a, b) => b.points - a.points || b.wins - a.wins || a.losses - b.losses || a.username.localeCompare(b.username));
+}
+function publicTournament(tournament, db, viewer) {
+  const registrations = Array.isArray(tournament.registrations) ? tournament.registrations : [];
+  const matches = db.matches.filter((match) => match.tournament_id === tournament.id).map((match) => publicMatch(match, db.users));
+  return { ...tournament, registrations: undefined, registered_count: registrations.length, is_registered: Boolean(viewer && registrations.some((entry) => entry.user_id === viewer.id)), standings: tournamentStandings(tournament, db), matches };
+}
+function createTournamentRound(db, tournament, playerIds, round) {
+  for (let index = 0; index < playerIds.length; index += 2) {
+    const createdAt = new Date().toISOString();
+    const match = { id: crypto.randomUUID(), match_code: createMatchCode(db), creator_id: playerIds[index], opponent_id: playerIds[index + 1], wager_amount: 0, game_mode: `${tournament.game_mode} · 1v1 · ${tournament.region}`, rules: tournament.rules || 'Tournament rules', status: 'IN_PROGRESS', created_at: createdAt, tournament_id: tournament.id, tournament_name: tournament.name, tournament_prize: tournament.winner_prize, tournament_round: round, tournament_slot: index / 2 };
+    db.matches.push(match);
+    db.wagers.push({ id: match.id, player1_id: match.creator_id, player2_id: match.opponent_id, amount: 0, status: match.status, created_at: createdAt, updated_at: createdAt, tournament_id: tournament.id });
+  }
+}
+function advanceTournament(db, match, actorId) {
+  if (!match.tournament_id) return;
+  const tournament = db.tournaments.find((item) => item.id === match.tournament_id);
+  if (!tournament || tournament.format !== 'BRACKET' || tournament.status !== 'IN_PROGRESS') return;
+  const round = Number(match.tournament_round || 1);
+  const roundMatches = db.matches.filter((item) => item.tournament_id === tournament.id && Number(item.tournament_round || 1) === round).sort((a, b) => a.tournament_slot - b.tournament_slot);
+  if (!roundMatches.length || roundMatches.some((item) => item.status !== 'COMPLETED')) return;
+  const winners = roundMatches.map((item) => item.winner_id);
+  if (winners.length === 1) {
+    const winner = db.users.find((item) => item.id === winners[0]);
+    if (winner && !tournament.prize_paid_at) winner.balance = money(winner.balance) + money(tournament.winner_prize);
+    tournament.status = 'COMPLETED'; tournament.winner_id = winners[0]; tournament.ended_at = new Date().toISOString(); tournament.prize_paid_at = tournament.ended_at;
+    audit(db, actorId, 'tournament_completed', { tournament_id: tournament.id, winner_id: winners[0], prize: tournament.winner_prize });
+    return;
+  }
+  if (!db.matches.some((item) => item.tournament_id === tournament.id && Number(item.tournament_round) === round + 1)) createTournamentRound(db, tournament, winners, round + 1);
 }
 function publicStats(db) {
   const openMatches = db.matches.filter((match) => match.status === 'PLAYER_1_DEPOSIT_PENDING' || match.status === 'OPEN').length;
@@ -338,6 +401,7 @@ function settleMatch(db, match, winnerId, actorId, source) {
   const wagerRecord = db.wagers.find((item) => item.id === match.id);
   if (wagerRecord) { wagerRecord.status = match.status; wagerRecord.winner_id = winner.id; wagerRecord.updated_at = match.settled_at; }
   audit(db, actorId, source === 'admin_override' ? 'match_result_overturned' : 'match_result_settled', { wager_id: match.id, winner_id: winner.id, payout_amount: winnerPayout, platform_fee: platformFee, source });
+  advanceTournament(db, match, actorId);
   return { changed: true, match };
 }
 
@@ -523,8 +587,30 @@ const server = http.createServer(async (request, response) => {
       const db = await readDb();
       const tournaments = [...db.tournaments]
         .filter((tournament) => tournament.status !== 'CANCELLED')
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+        .map((tournament) => publicTournament(tournament, db, user));
       return sendJson(response, 200, { tournaments });
+    }
+    if (request.method === 'POST' && /^\/api\/tournaments\/[^/]+\/register$/.test(url.pathname)) {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      const tournamentId = decodeURIComponent(url.pathname.split('/')[3]);
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const storedUser = db.users.find((item) => item.id === user.id);
+        const tournament = db.tournaments.find((item) => item.id === tournamentId);
+        if (!storedUser || !tournament) return { status: 404, error: 'Tournament not found.' };
+        if (tournament.status !== 'OPEN') return { status: 409, error: 'Registration is closed.' };
+        if (!storedUser.minecraft_verified) return { status: 403, error: 'Verify your Minecraft account before registering.' };
+        tournament.registrations ??= [];
+        if (tournament.registrations.some((entry) => entry.user_id === user.id)) return { status: 409, error: 'You are already registered.' };
+        if (tournament.registrations.length >= Number(tournament.max_players || 16)) return { status: 409, error: 'This tournament is full.' };
+        tournament.registrations.push({ user_id: user.id, joined_at: new Date().toISOString() });
+        audit(db, user.id, 'tournament_registered', { tournament_id: tournament.id });
+        await writeDb(db);
+        return { status: 200, tournament: publicTournament(tournament, db, storedUser) };
+      });
+      return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : { tournament: outcome.tournament });
     }
     if (request.method === 'GET' && url.pathname === '/api/announcements') {
       const user = await currentUser(request);
@@ -555,19 +641,25 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'POST' && url.pathname === '/api/admin/tournaments') {
       const user = await currentUser(request);
       if (!requireAdmin(response, user)) return;
-      const { name, region, game_mode, gameMode, winner_prize, winnerPrize, start_now, startNow } = await readJson(request);
+      const { name, region, game_mode, gameMode, winner_prize, winnerPrize, format, max_players, maxPlayers, duration_hours, durationHours, rules } = await readJson(request);
       const tournamentName = String(name || '').trim().slice(0, 60);
       const tournamentRegion = String(region || '').toUpperCase();
       const tournamentMode = String(game_mode || gameMode || '');
       const prize = Number(winner_prize ?? winnerPrize);
+      const tournamentFormat = String(format || 'BRACKET').toUpperCase();
+      const maxPlayersValue = Number(max_players ?? maxPlayers ?? 16);
+      const duration = Number(duration_hours ?? durationHours ?? 24);
       if (tournamentName.length < 3) return sendJson(response, 400, { error: 'Tournament name must be at least 3 characters.' });
       if (!['EU', 'NAE'].includes(tournamentRegion)) return sendJson(response, 400, { error: 'Choose EU or NAE.' });
       if (!['Crystal PvP', 'Sword'].includes(tournamentMode)) return sendJson(response, 400, { error: 'Choose Crystal PvP or Sword.' });
+      if (!['BRACKET', 'LEADERBOARD'].includes(tournamentFormat)) return sendJson(response, 400, { error: 'Choose bracket or leaderboard format.' });
+      if (!Number.isSafeInteger(maxPlayersValue) || ![2, 4, 8, 16, 32, 64].includes(maxPlayersValue)) return sendJson(response, 400, { error: 'Tournament size must be 2, 4, 8, 16, 32, or 64 players.' });
+      if (!Number.isSafeInteger(duration) || duration < 1 || duration > 168) return sendJson(response, 400, { error: 'Leaderboard duration must be from 1 to 168 hours.' });
       if (!Number.isSafeInteger(prize) || prize < 1 || prize > 1_000_000_000_000) return sendJson(response, 400, { error: 'Enter a whole-number winner prize from 1 to 1 trillion.' });
       const tournament = await withEscrowMutation(async () => {
         const db = await readDb();
         const now = new Date().toISOString();
-        const created = { id: crypto.randomUUID(), name: tournamentName, region: tournamentRegion, game_mode: tournamentMode, winner_prize: prize, status: (start_now ?? startNow) ? 'IN_PROGRESS' : 'OPEN', created_by: user.id, created_at: now, started_at: (start_now ?? startNow) ? now : null };
+        const created = { id: crypto.randomUUID(), name: tournamentName, region: tournamentRegion, game_mode: tournamentMode, format: tournamentFormat, max_players: maxPlayersValue, duration_hours: duration, points_per_win: 3, winner_prize: prize, rules: String(rules || 'First to 5, win by two.').slice(0, 500), status: 'OPEN', registrations: [], created_by: user.id, created_at: now, started_at: null, ended_at: null, winner_id: null, prize_paid_at: null };
         db.tournaments.push(created);
         audit(db, user.id, 'tournament_created', { tournament_id: created.id, region: created.region, game_mode: created.game_mode, winner_prize: created.winner_prize, status: created.status });
         await writeDb(db);
@@ -610,8 +702,13 @@ const server = http.createServer(async (request, response) => {
           const selected = db.tournaments.find((item) => item.id === tournamentId);
           if (!selected) throw Object.assign(new Error('Tournament not found.'), { statusCode: 404 });
           if (selected.status !== 'OPEN') throw Object.assign(new Error('Only an open tournament can be started.'), { statusCode: 409 });
+          selected.registrations ??= [];
+          if (selected.registrations.length < 2) throw Object.assign(new Error('At least two verified players must register before the tournament starts.'), { statusCode: 409 });
+          if (selected.format === 'BRACKET' && ![2, 4, 8, 16, 32, 64].includes(selected.registrations.length)) throw Object.assign(new Error('Bracket tournaments require exactly 2, 4, 8, 16, 32, or 64 registered players.'), { statusCode: 409 });
           selected.status = 'IN_PROGRESS';
           selected.started_at = new Date().toISOString();
+          if (selected.format === 'LEADERBOARD') selected.ends_at = new Date(Date.now() + Number(selected.duration_hours || 24) * 3600000).toISOString();
+          else createTournamentRound(db, selected, selected.registrations.map((entry) => entry.user_id), 1);
           audit(db, user.id, 'tournament_started', { tournament_id: selected.id });
           await writeDb(db);
           return selected;
@@ -620,6 +717,26 @@ const server = http.createServer(async (request, response) => {
       } catch (error) {
         return sendJson(response, error.statusCode || 500, { error: error.message || 'Tournament could not be started.' });
       }
+    }
+    if (request.method === 'POST' && /^\/api\/admin\/tournaments\/[^/]+\/end$/.test(url.pathname)) {
+      const user = await currentUser(request);
+      if (!requireAdmin(response, user)) return;
+      const tournamentId = decodeURIComponent(url.pathname.split('/')[4]);
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const tournament = db.tournaments.find((item) => item.id === tournamentId);
+        if (!tournament) return { status: 404, error: 'Tournament not found.' };
+        if (tournament.format !== 'LEADERBOARD' || tournament.status !== 'IN_PROGRESS') return { status: 409, error: 'Only an active leaderboard tournament can be ended manually.' };
+        const standings = tournamentStandings(tournament, db);
+        if (!standings.length || standings[0].wins < 1) return { status: 409, error: 'At least one completed eligible match is required.' };
+        const winner = db.users.find((item) => item.id === standings[0].user_id);
+        if (!tournament.prize_paid_at) winner.balance = money(winner.balance) + money(tournament.winner_prize);
+        tournament.status = 'COMPLETED'; tournament.winner_id = winner.id; tournament.ended_at = new Date().toISOString(); tournament.prize_paid_at = tournament.ended_at;
+        audit(db, user.id, 'tournament_completed', { tournament_id: tournament.id, winner_id: winner.id, prize: tournament.winner_prize });
+        await writeDb(db);
+        return { status: 200, tournament: publicTournament(tournament, db, user) };
+      });
+      return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : { tournament: outcome.tournament });
     }
     if (request.method === 'POST' && url.pathname === '/api/admin/balance') {
       const user = await currentUser(request);
@@ -657,6 +774,7 @@ const server = http.createServer(async (request, response) => {
       const match = findMatch(db, code);
       if (!match) return sendJson(response, 404, { error: 'Match not found.' });
       if (!match.opponent_id) return sendJson(response, 409, { error: 'Both participants are required before setting a winner.' });
+      if (match.tournament_id && match.status === 'COMPLETED' && match.winner_id !== winnerId) return sendJson(response, 409, { error: 'A completed bracket result cannot be overturned after advancement. Resolve tournament disputes before confirming the round.' });
       try {
         const result = settleMatch(db, match, winnerId, user.id, 'admin_override');
         await writeDb(db);
@@ -1088,6 +1206,7 @@ const server = http.createServer(async (request, response) => {
         const db = await readDb();
         const match = findMatch(db, code);
         if (!match) return { status: 404, error: 'Match not found.' };
+        if (match.tournament_id) return { status: 409, error: 'Tournament matches cannot be cancelled by players. Contact staff if the round cannot be played.' };
         const isCreator = match.creator_id === user.id;
         const isOpponent = match.opponent_id === user.id;
         if (!isCreator && !isOpponent) return { status: 403, error: 'Only match participants can cancel this match.' };
@@ -1217,7 +1336,10 @@ async function startServer() {
   }
   server.listen(PORT, '0.0.0.0', () => console.log(`DonutWagers running at http://localhost:${PORT}`));
 }
-startServer().catch((error) => {
-  console.error(`DonutWagers could not start: ${error.message}`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  startServer().catch((error) => {
+    console.error(`DonutWagers could not start: ${error.message}`);
+    process.exitCode = 1;
+  });
+}
+module.exports = { createTournamentRound, settleMatch, tournamentStandings, publicTournament };

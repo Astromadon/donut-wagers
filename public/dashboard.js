@@ -441,10 +441,23 @@ function ensureAnnouncementAdmin() {
   if (!grid || $('#announcement-form')) return;
   grid.insertAdjacentHTML('beforeend', `<form id="announcement-form" class="admin-control-card announcement-admin-card"><small>COMMUNITY CONTROL</small><h2>Post an announcement</h2><label class="label" for="announcement-title">TITLE</label><input id="announcement-title" class="amount" maxlength="100" placeholder="Tournament starting soon" required><label class="label" for="announcement-message">MESSAGE</label><textarea id="announcement-message" class="amount" maxlength="2000" placeholder="Write the announcement players will see..." required></textarea><label class="discord-publish-option"><input id="announcement-discord" type="checkbox" checked><span><b>Post through Discord bot</b><small>Also sends this to your configured announcements channel.</small></span></label><button type="submit" class="orange">Publish announcement</button></form>`);
 }
+function ensureTournamentFields() {
+  const prize = $('#tournament-prize');
+  if (!prize || $('#tournament-format')) return;
+  const startImmediately = document.querySelector('[data-tournament-submit="start"]');
+  if (startImmediately) startImmediately.hidden = true;
+  const createButton = document.querySelector('[data-tournament-submit="save"]');
+  if (createButton) createButton.textContent = 'Create tournament';
+  prize.closest('form').querySelector('.admin-field-row').insertAdjacentHTML('afterend', `<div class="admin-field-row tournament-extra-fields"><label>FORMAT<select id="tournament-format"><option value="BRACKET">Bracket</option><option value="LEADERBOARD">Leaderboard</option></select></label><label>MAX PLAYERS<select id="tournament-max-players"><option>2</option><option>4</option><option>8</option><option selected>16</option><option>32</option><option>64</option></select></label></div><label class="label" for="tournament-duration">LEADERBOARD WINDOW (HOURS)</label><input id="tournament-duration" class="amount" type="number" min="1" max="168" value="24"><label class="label" for="tournament-rules">RULES</label><input id="tournament-rules" class="amount" maxlength="500" value="First to 5, win by two.">`);
+}
 function tournamentCard(tournament, admin = false) {
   const status = String(tournament.status || 'OPEN');
-  const statusLabel = status === 'IN_PROGRESS' ? 'In progress' : 'Open for players';
-  return `<article class="tournament-card"><div class="tournament-card-accent"></div><header><span>♛</span><div><small>OFFICIAL TOURNAMENT</small><h2>${escapeHtml(tournament.name)}</h2></div><b class="tournament-status ${status.toLowerCase()}">${statusLabel}</b></header><div class="tournament-specs"><span><small>REGION</small><b>◉ ${escapeHtml(tournament.region)}</b></span><span><small>MODE</small><b>${tournament.game_mode === 'Crystal PvP' ? '◆ CPvP' : '⚔ Sword'}</b></span><span><small>WINNER PRIZE</small><b class="tournament-prize">${Number(tournament.winner_prize || 0).toLocaleString()}</b></span></div>${admin && status === 'OPEN' ? `<footer><button data-start-tournament="${escapeHtml(tournament.id)}">Start tournament</button></footer>` : ''}</article>`;
+  const statusLabel = status === 'IN_PROGRESS' ? 'In progress' : status === 'COMPLETED' ? 'Completed' : 'Registration open';
+  const standings = (tournament.standings || []).slice(0, 5).map((row, index) => `<li><b>${index + 1}</b><span>${escapeHtml(row.username)}<small>${row.minecraft_username ? escapeHtml(row.minecraft_username) : 'Minecraft verified player'}</small></span><strong>${row.points} pts · ${row.wins}W</strong></li>`).join('');
+  const bracket = (tournament.matches || []).length ? `<div class="tournament-match-list"><small>MATCHES</small>${tournament.matches.map((match) => `<a href="${escapeHtml(match.match_url)}"><span>Round ${Number(match.tournament_round || 1)} · ${escapeHtml(match.creator)} vs ${escapeHtml(match.opponent || 'TBD')}</span><b>${escapeHtml(String(match.status).replaceAll('_',' '))} →</b></a>`).join('')}</div>` : '';
+  const register = status === 'OPEN' && !tournament.is_registered ? `<button data-register-tournament="${escapeHtml(tournament.id)}">Register free</button>` : status === 'OPEN' ? '<button disabled>✓ Registered</button>' : '';
+  const adminAction = admin && status === 'OPEN' ? `<button data-start-tournament="${escapeHtml(tournament.id)}">Start tournament</button>` : admin && status === 'IN_PROGRESS' && tournament.format === 'LEADERBOARD' ? `<button data-end-tournament="${escapeHtml(tournament.id)}">End & pay winner</button>` : '';
+  return `<article class="tournament-card"><div class="tournament-card-accent"></div><header><span>♛</span><div><small>${escapeHtml(tournament.format || 'BRACKET')} · FREE ENTRY</small><h2>${escapeHtml(tournament.name)}</h2></div><b class="tournament-status ${status.toLowerCase()}">${statusLabel}</b></header><div class="tournament-specs"><span><small>REGION</small><b>◉ ${escapeHtml(tournament.region)}</b></span><span><small>MODE</small><b>${tournament.game_mode === 'Crystal PvP' ? '◆ CPvP' : '⚔ Sword'}</b></span><span><small>PLAYERS</small><b>${Number(tournament.registered_count || 0)} / ${Number(tournament.max_players || 16)}</b></span><span><small>WINNER PRIZE</small><b class="tournament-prize">${Number(tournament.winner_prize || 0).toLocaleString()}</b></span></div>${standings ? `<ol class="tournament-standings">${standings}</ol>` : ''}${bracket}<footer>${admin ? adminAction : register}</footer></article>`;
 }
 function renderTournaments(tournaments, admin = false) {
   const destination = admin ? $('#admin-tournament-list') : $('#tournament-list');
@@ -477,6 +490,7 @@ function renderAdminMatches(matches) {
 async function loadAdmin() {
   if (!currentUser?.is_admin) return;
   ensureAnnouncementAdmin();
+  ensureTournamentFields();
   $('#admin-match-list').innerHTML = '<div class="empty"><h2>Loading admin matches…</h2></div>';
   loadTournaments(true);
   try { renderAdminMatches((await api('/api/admin/matches')).matches); }
@@ -505,19 +519,33 @@ $('#tournament-form').addEventListener('submit', async (event) => {
   if (!prize) return toast('Enter a valid winner prize, such as 10m.');
   submitter.disabled = true;
   try {
-    const result = await api('/api/admin/tournaments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: $('#tournament-name').value, region: $('#tournament-region').value, game_mode: $('#tournament-mode').value, winner_prize: prize, start_now: submitter.dataset.tournamentSubmit === 'start' }) });
-    toast(`${result.tournament.name} ${result.tournament.status === 'IN_PROGRESS' ? 'started' : 'created'}.`);
+    const result = await api('/api/admin/tournaments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: $('#tournament-name').value, region: $('#tournament-region').value, game_mode: $('#tournament-mode').value, winner_prize: prize, format: $('#tournament-format').value, max_players: Number($('#tournament-max-players').value), duration_hours: Number($('#tournament-duration').value), rules: $('#tournament-rules').value }) });
+    toast(`${result.tournament.name} created. Players can now register.`);
     event.currentTarget.reset();
     loadTournaments(true);
   } catch (error) { toast(error.message); }
   finally { submitter.disabled = false; }
 });
 $('#admin-tournament-list').addEventListener('click', async (event) => {
+  const endButton = event.target.closest('[data-end-tournament]');
+  if (endButton) {
+    if (!window.confirm('End this leaderboard and pay the current first-place player?')) return;
+    endButton.disabled = true;
+    try { await api(`/api/admin/tournaments/${encodeURIComponent(endButton.dataset.endTournament)}/end`, { method: 'POST' }); toast('Leaderboard completed and winner paid.'); loadTournaments(true); load(); } catch (error) { endButton.disabled = false; toast(error.message); }
+    return;
+  }
   const button = event.target.closest('[data-start-tournament]');
   if (!button) return;
   if (!window.confirm('Start this tournament now?')) return;
   button.disabled = true;
   try { await api(`/api/admin/tournaments/${encodeURIComponent(button.dataset.startTournament)}/start`, { method: 'POST' }); toast('Tournament started.'); loadTournaments(true); }
+  catch (error) { button.disabled = false; toast(error.message); }
+});
+$('#tournament-list').addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-register-tournament]');
+  if (!button) return;
+  button.disabled = true;
+  try { await api(`/api/tournaments/${encodeURIComponent(button.dataset.registerTournament)}/register`, { method: 'POST' }); toast('Tournament registration confirmed.'); loadTournaments(); }
   catch (error) { button.disabled = false; toast(error.message); }
 });
 $('#balance-credit-form').addEventListener('submit', async (event) => {
