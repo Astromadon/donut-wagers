@@ -23,6 +23,7 @@ if (IS_PRODUCTION && !DATABASE_URL) {
   throw new Error('DATABASE_URL is required in production. Refusing to use temporary local storage because it would erase user data after a restart or redeploy.');
 }
 const SESSION_MAX_AGE_SECONDS = 180 * 24 * 60 * 60;
+const MIN_WITHDRAWAL_AMOUNT = 15_000_000;
 const ROOT = __dirname;
 const DATA_FILE = process.env.DONUTWAGERS_DATA_FILE ? path.resolve(process.env.DONUTWAGERS_DATA_FILE) : path.join(ROOT, 'data', 'db.json');
 const donutSmpService = new DonutWagersBotService({ apiUrl: process.env.DONUT_SMP_API_URL, apiKey: process.env.DONUT_SMP_API_KEY, botUsername: process.env.DONUT_WAGERS_BOT_USERNAME });
@@ -1004,7 +1005,7 @@ const server = http.createServer(async (request, response) => {
       if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
       const { amount } = await readJson(request);
       const numericAmount = Number(amount);
-      if (!Number.isSafeInteger(numericAmount) || numericAmount < 100_000 || numericAmount > 1_000_000_000_000) return sendJson(response, 400, { error: 'Enter a whole-number withdrawal from 100,000 to 1,000,000,000,000.' });
+      if (!Number.isSafeInteger(numericAmount) || numericAmount < MIN_WITHDRAWAL_AMOUNT || numericAmount > 1_000_000_000_000) return sendJson(response, 400, { error: 'The minimum withdrawal is 15,000,000.' });
       const outcome = await withEscrowMutation(async () => {
         const db = await readDb();
         const storedUser = db.users.find((item) => item.id === user.id);

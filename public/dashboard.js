@@ -11,6 +11,7 @@ let walletTab = 'deposit';
 let walletTimer = null;
 let walletPoll = null;
 let walletBotOnline = false;
+const MIN_WITHDRAWAL_AMOUNT = 15_000_000;
 function tagStyle(tag) {
   const normalized = String(tag || '').trim().toLowerCase();
   if (normalized === 'owner') return 'owner';
@@ -298,10 +299,10 @@ async function renderWithdraw(message = '') {
     if (response.withdrawal && ['pending','processing'].includes(response.withdrawal.status)) return showWithdrawal(response.withdrawal);
   } catch { /* The form below will display any new request error. */ }
   const player = currentUser?.minecraft_username ? escapeHtml(currentUser.minecraft_username) : 'Minecraft verification required';
-  $('#wallet-dialog-content').innerHTML = `<div class="wallet-deposit-form withdrawal-form"><p class="wallet-hint">Minimum withdrawal is 100k. Payouts are sent automatically by DonutWagersBot.</p>${message ? `<p class="wallet-error">${escapeHtml(message)}</p>` : ''}<label class="label" for="withdrawal-amount">AMOUNT TO WITHDRAW <small>e.g. 1m · 500k</small></label><input id="withdrawal-amount" class="amount wallet-amount" inputmode="decimal" autocomplete="off" placeholder="1m"><p class="wallet-from">Paying to <b>${player}</b></p><button id="start-withdrawal" class="purple" ${currentUser?.minecraft_verified && walletBotOnline ? '' : 'disabled'}>Withdraw to Minecraft</button></div>`;
+  $('#wallet-dialog-content').innerHTML = `<div class="wallet-deposit-form withdrawal-form"><p class="wallet-hint">Minimum withdrawal is 15 million. Payouts are sent automatically by DonutWagersBot.</p>${message ? `<p class="wallet-error">${escapeHtml(message)}</p>` : ''}<label class="label" for="withdrawal-amount">AMOUNT TO WITHDRAW <small>minimum 15m</small></label><input id="withdrawal-amount" class="amount wallet-amount" inputmode="decimal" autocomplete="off" placeholder="15m"><p class="wallet-from">Paying to <b>${player}</b></p><button id="start-withdrawal" class="purple" ${currentUser?.minecraft_verified && walletBotOnline ? '' : 'disabled'}>Withdraw to Minecraft</button></div>`;
   $('#start-withdrawal').onclick = async () => {
     const amount = parseWalletAmount($('#withdrawal-amount').value);
-    if (!amount) return renderWithdraw('Enter an amount such as 1m or 500k.');
+    if (!amount || amount < MIN_WITHDRAWAL_AMOUNT) return renderWithdraw('The minimum withdrawal is 15 million.');
     const button = $('#start-withdrawal'); button.disabled = true; button.textContent = 'Creating withdrawal…';
     try {
       const result = await api('/api/wallet/withdrawals', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amount }) });
