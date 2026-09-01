@@ -7,12 +7,13 @@ class DiscordTicketServiceError extends Error {
 }
 
 class DiscordTicketService {
-  constructor({ botToken, guildId, categoryId, staffRoleId, ownerId }) {
+  constructor({ botToken, guildId, categoryId, staffRoleId, ownerId, announcementChannelId }) {
     this.botToken = botToken;
     this.guildId = guildId;
     this.categoryId = categoryId || null;
     this.staffRoleId = staffRoleId || null;
     this.ownerId = ownerId || null;
+    this.announcementChannelId = announcementChannelId || null;
     this.botUserId = null;
   }
 
@@ -78,6 +79,25 @@ class DiscordTicketService {
       channelId: channel.id,
       channelUrl: `https://discord.com/channels/${this.guildId}/${channel.id}`,
     };
+  }
+
+  async postAnnouncement({ title, message }) {
+    if (!this.botToken || !this.announcementChannelId) throw new DiscordTicketServiceError('Discord announcements are not configured.', 503);
+    if (!/^\d{17,20}$/.test(String(this.announcementChannelId))) throw new DiscordTicketServiceError('The Discord announcement channel ID is invalid.', 500);
+    const created = await this.request(`/channels/${this.announcementChannelId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({
+        embeds: [{
+          title: String(title || 'DonutWagers announcement').slice(0, 256),
+          description: String(message || '').slice(0, 4096),
+          color: 12120632,
+          footer: { text: 'DonutWagers Official' },
+          timestamp: new Date().toISOString(),
+        }],
+        allowed_mentions: { parse: [] },
+      }),
+    });
+    return { messageId: created.id, channelId: this.announcementChannelId, messageUrl: `https://discord.com/channels/${this.guildId}/${this.announcementChannelId}/${created.id}` };
   }
 
   async banGuildMember(discordId, reason) {

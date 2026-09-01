@@ -29,6 +29,7 @@ const discordTicketService = new DiscordTicketService({
   categoryId: process.env.DISCORD_TICKET_CATEGORY_ID,
   staffRoleId: process.env.DISCORD_STAFF_ROLE_ID,
   ownerId: ADMIN_DISCORD_ID,
+  announcementChannelId: process.env.DISCORD_ANNOUNCEMENT_CHANNEL_ID,
 });
 
 function loadEnvFile() {
@@ -42,13 +43,15 @@ function loadEnvFile() {
 }
 
 function emptyDb() {
-  return { users: [], sessions: [], matches: [], minecraft_accounts: [], verification_codes: [], wagers: [], deposits: [], withdrawals: [], audit_logs: [], support_tickets: [], bans: [], bot_status: { last_heartbeat_at: null, bot_username: donutSmpService.botUsername } };
+  return { users: [], sessions: [], matches: [], tournaments: [], announcements: [], minecraft_accounts: [], verification_codes: [], wagers: [], deposits: [], withdrawals: [], audit_logs: [], support_tickets: [], bans: [], bot_status: { last_heartbeat_at: null, bot_username: donutSmpService.botUsername } };
 }
 function normalizeDb(db) {
   db ??= emptyDb();
   db.users ??= [];
   db.sessions ??= [];
   db.matches ??= [];
+  db.tournaments ??= [];
+  db.announcements ??= [];
   db.minecraft_accounts ??= [];
   db.verification_codes ??= [];
   db.wagers ??= [];
@@ -508,6 +511,22 @@ const server = http.createServer(async (request, response) => {
       const db = await readDb();
       return sendJson(response, 200, botStatus(db));
     }
+    if (request.method === 'GET' && url.pathname === '/api/tournaments') {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      const db = await readDb();
+      const tournaments = [...db.tournaments]
+        .filter((tournament) => tournament.status !== 'CANCELLED')
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      return sendJson(response, 200, { tournaments });
+    }
+    if (request.method === 'GET' && url.pathname === '/api/announcements') {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      const db = await readDb();
+      const announcements = [...db.announcements].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 20);
+      return sendJson(response, 200, { announcements });
+    }
     if (request.method === 'POST' && url.pathname === '/api/bot/heartbeat') {
       if (!BOT_WEBHOOK_SECRET) return sendJson(response, 503, { error: 'Bot verification is not configured.' });
       if (!safeEqual(getBotWebhookSecret(request), BOT_WEBHOOK_SECRET)) return sendJson(response, 401, { error: 'Unauthorized bot request.' });
@@ -526,6 +545,101 @@ const server = http.createServer(async (request, response) => {
       const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit') || 50)));
       const matches = [...db.matches].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, limit).map((match) => adminMatch(match, db.users));
       return sendJson(response, 200, { matches });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/admin/tournaments') {
+      const user = await currentUser(request);
+      if (!requireAdmin(response, user)) return;
+      const { name, region, game_mode, gameMode, winner_prize, winnerPrize, start_now, startNow } = await readJson(request);
+      const tournamentName = String(name || '').trim().slice(0, 60);
+      const tournamentRegion = String(region || '').toUpperCase();
+      const tournamentMode = String(game_mode || gameMode || '');
+      const prize = Number(winner_prize ?? winnerPrize);
+      if (tournamentName.length < 3) return sendJson(response, 400, { error: 'Tournament name must be at least 3 characters.' });
+      if (!['EU', 'NAE'].includes(tournamentRegion)) return sendJson(response, 400, { error: 'Choose EU or NAE.' });
+      if (!['Crystal PvP', 'Sword'].includes(tournamentMode)) return sendJson(response, 400, { error: 'Choose Crystal PvP or Sword.' });
+      if (!Number.isSafeInteger(prize) || prize < 1 || prize > 1_000_000_000_000) return sendJson(response, 400, { error: 'Enter a whole-number winner prize from 1 to 1 trillion.' });
+      const tournament = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const now = new Date().toISOString();
+        const created = { id: crypto.randomUUID(), name: tournamentName, region: tournamentRegion, game_mode: tournamentMode, winner_prize: prize, status: (start_now ?? startNow) ? 'IN_PROGRESS' : 'OPEN', created_by: user.id, created_at: now, started_at: (start_now ?? startNow) ? now : null };
+        db.tournaments.push(created);
+        audit(db, user.id, 'tournament_created', { tournament_id: created.id, region: created.region, game_mode: created.game_mode, winner_prize: created.winner_prize, status: created.status });
+        await writeDb(db);
+        return created;
+      });
+      return sendJson(response, 201, { tournament });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/admin/announcements') {
+      const user = await currentUser(request);
+      if (!requireAdmin(response, user)) return;
+      const { title, message, publish_to_discord, publishToDiscord } = await readJson(request);
+      const announcementTitle = String(title || '').trim().slice(0, 100);
+      const announcementMessage = String(message || '').trim().slice(0, 2000);
+      const sendToDiscord = publish_to_discord ?? publishToDiscord ?? true;
+      if (announcementTitle.length < 3) return sendJson(response, 400, { error: 'Announcement title must be at least 3 characters.' });
+      if (announcementMessage.length < 3) return sendJson(response, 400, { error: 'Announcement message must be at least 3 characters.' });
+      let discordMessage = null;
+      if (sendToDiscord) {
+        try {
+          discordMessage = await discordTicketService.postAnnouncement({ title: announcementTitle, message: announcementMessage });
+        } catch (error) {
+          console.error('Discord announcement error:', error instanceof DiscordTicketServiceError ? error.status : error.message);
+          return sendJson(response, error.status === 503 ? 503 : 502, { error: error.status === 503 ? 'Discord announcements are not configured. Add DISCORD_BOT_TOKEN and DISCORD_ANNOUNCEMENT_CHANNEL_ID, or turn off Discord publishing.' : 'Discord could not publish the announcement. Check the bot channel permissions.' });
+        }
+      }
+      const db = await readDb();
+      const announcement = { id: crypto.randomUUID(), title: announcementTitle, message: announcementMessage, created_by: user.id, created_at: new Date().toISOString(), discord_message_id: discordMessage?.messageId || null, discord_message_url: discordMessage?.messageUrl || null };
+      db.announcements.push(announcement);
+      audit(db, user.id, 'announcement_published', { announcement_id: announcement.id, published_to_discord: Boolean(discordMessage) });
+      await writeDb(db);
+      return sendJson(response, 201, { announcement });
+    }
+    if (request.method === 'POST' && /^\/api\/admin\/tournaments\/[^/]+\/start$/.test(url.pathname)) {
+      const user = await currentUser(request);
+      if (!requireAdmin(response, user)) return;
+      const tournamentId = decodeURIComponent(url.pathname.split('/')[4]);
+      try {
+        const tournament = await withEscrowMutation(async () => {
+          const db = await readDb();
+          const selected = db.tournaments.find((item) => item.id === tournamentId);
+          if (!selected) throw Object.assign(new Error('Tournament not found.'), { statusCode: 404 });
+          if (selected.status !== 'OPEN') throw Object.assign(new Error('Only an open tournament can be started.'), { statusCode: 409 });
+          selected.status = 'IN_PROGRESS';
+          selected.started_at = new Date().toISOString();
+          audit(db, user.id, 'tournament_started', { tournament_id: selected.id });
+          await writeDb(db);
+          return selected;
+        });
+        return sendJson(response, 200, { tournament });
+      } catch (error) {
+        return sendJson(response, error.statusCode || 500, { error: error.message || 'Tournament could not be started.' });
+      }
+    }
+    if (request.method === 'POST' && url.pathname === '/api/admin/balance') {
+      const user = await currentUser(request);
+      if (!requireAdmin(response, user)) return;
+      const { player, amount, reason } = await readJson(request);
+      const playerQuery = String(player || '').trim().toLowerCase();
+      const credit = Number(amount);
+      const creditReason = String(reason || 'Owner balance adjustment').trim().slice(0, 160);
+      if (playerQuery.length < 2 || playerQuery.length > 64) return sendJson(response, 400, { error: 'Enter a Discord ID, Discord username, or verified Minecraft username.' });
+      if (!Number.isSafeInteger(credit) || credit < 1 || credit > 1_000_000_000_000) return sendJson(response, 400, { error: 'Enter a whole-number credit from 1 to 1 trillion.' });
+      try {
+        const result = await withEscrowMutation(async () => {
+          const db = await readDb();
+          const matches = db.users.filter((candidate) => [candidate.discord_id, candidate.discord_username, candidate.minecraft_verified ? candidate.minecraft_username : ''].some((value) => String(value || '').toLowerCase() === playerQuery));
+          if (!matches.length) throw Object.assign(new Error('Player not found. Use an exact Discord ID, Discord username, or verified Minecraft username.'), { statusCode: 404 });
+          if (matches.length > 1) throw Object.assign(new Error('More than one player has that name. Use the exact Discord ID.'), { statusCode: 409 });
+          const target = matches[0];
+          target.balance = money(target.balance) + credit;
+          audit(db, user.id, 'admin_balance_added', { target_user_id: target.id, amount: credit, reason: creditReason, new_balance: target.balance });
+          await writeDb(db);
+          return { username: target.discord_username, discord_id: target.discord_id, balance: target.balance };
+        });
+        return sendJson(response, 200, { player: result });
+      } catch (error) {
+        return sendJson(response, error.statusCode || 500, { error: error.message || 'Balance could not be updated.' });
+      }
     }
     if (request.method === 'POST' && /^\/api\/admin\/matches\/[^/]+\/resolve$/.test(url.pathname)) {
       const user = await currentUser(request);

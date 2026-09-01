@@ -81,9 +81,10 @@ DISCORD_BOT_TOKEN=your_discord_bot_token
 DISCORD_GUILD_ID=your_discord_server_id
 DISCORD_TICKET_CATEGORY_ID=optional_category_id_for_tickets
 DISCORD_STAFF_ROLE_ID=staff_or_moderator_role_id
+DISCORD_ANNOUNCEMENT_CHANNEL_ID=channel_id_for_owner_announcements
 ```
 
-Invite the bot to the selected server with permission to view the target category, create channels, send messages, read message history, attach files, and **Ban Members**. Place the bot's role above every role it must moderate. The website creates one private ticket per match: only the two match participants, the configured staff role, the configured owner, and the bot can view it. It posts the match URL in that channel. Never put the bot token in browser code or commit it to Git.
+Invite the bot to the selected server with permission to view the target category, create channels, send messages, embed links, read message history, attach files, and **Ban Members**. Place the bot's role above every role it must moderate. The website creates one private ticket per match: only the two match participants, the configured staff role, the configured owner, and the bot can view it. It posts the match URL in that channel. The Admin Panel can also publish official announcements to the website and to `DISCORD_ANNOUNCEMENT_CHANNEL_ID`. Never put the bot token in browser code or commit it to Git.
 
 ## Owner administration and player moderation
 
