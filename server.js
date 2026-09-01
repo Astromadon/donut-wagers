@@ -19,6 +19,9 @@ const ADMIN_DISCORD_ID = String(process.env.DONUT_WAGERS_ADMIN_DISCORD_ID || '')
 const APP_BASE_URL = (process.env.APP_BASE_URL || `http://localhost:${PORT}`).replace(/\/+$/, '');
 const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+if (IS_PRODUCTION && !DATABASE_URL) {
+  throw new Error('DATABASE_URL is required in production. Refusing to use temporary local storage because it would erase user data after a restart or redeploy.');
+}
 const SESSION_MAX_AGE_SECONDS = 180 * 24 * 60 * 60;
 const ROOT = __dirname;
 const DATA_FILE = path.join(ROOT, 'data', 'db.json');
@@ -424,7 +427,10 @@ async function handleDiscordCallback(request, response, url) {
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
   try {
-    if (request.method === 'GET' && url.pathname === '/health') return sendJson(response, 200, { status: 'ok', storage: postgresStore ? 'postgresql' : 'local-json' });
+    if (request.method === 'GET' && url.pathname === '/health') {
+      await readDb();
+      return sendJson(response, 200, { status: 'ok', storage: postgresStore ? 'postgresql-persistent' : 'local-json-development' });
+    }
     if (request.method === 'GET' && url.pathname === '/') {
       if (await currentUser(request)) return redirect(response, '/dashboard');
       return serveFile(response, 'index.html', 'text/html; charset=utf-8');
@@ -1204,6 +1210,7 @@ const server = http.createServer(async (request, response) => {
 async function startServer() {
   if (postgresStore) {
     await postgresStore.initialize();
+    await readDb();
     console.log('DonutWagers storage: PostgreSQL');
   } else {
     console.log('DonutWagers storage: local JSON (development only)');

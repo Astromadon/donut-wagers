@@ -20,7 +20,15 @@ The authorization request uses only `identify`. The browser receives an opaque, 
 
 ## Storage
 
-Local development uses `data/db.json`, which is ignored by Git. Production uses PostgreSQL when `DATABASE_URL` is set. The server automatically creates its `donut_wagers_state` table and uses PostgreSQL row locking for every escrow reservation, so concurrent servers cannot reserve the same balance twice.
+Local development uses `data/db.json`, which is ignored by Git. Production requires Railway PostgreSQL through `DATABASE_URL`; the server now refuses to start instead of falling back to Railway's temporary filesystem. This keeps users, sessions, balances, matches, tournaments, announcements, verification records, bans, and audit logs intact across restarts and redeployments. The server automatically creates its `donut_wagers_state` table and uses PostgreSQL row locking for every escrow reservation, so concurrent servers cannot reserve the same balance twice.
+
+In Railway, add a PostgreSQL service to the same project and set the website service variable exactly as a Railway reference variable:
+
+```dotenv
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+```
+
+If your database service has a different name, replace `Postgres` with that service name. Do not paste `postgres.railway.internal` into a local machine; that private address only works between Railway services. After deployment, `/health` must report `"storage":"postgresql-persistent"`.
 
 Before a first production deploy, keep the local JSON file as a backup and import it once with a private `DATABASE_URL`:
 
