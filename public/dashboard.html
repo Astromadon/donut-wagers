@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>DonutWagers</title>
-  <link rel="stylesheet" href="/styles.css?v=20260902">
-  <link rel="stylesheet" href="/dashboard.css?v=20260902">
+  <link rel="stylesheet" href="/styles.css?v=20260902b">
+  <link rel="stylesheet" href="/dashboard.css?v=20260902b">
   <style>
     .profile-title { align-items:center; display:flex; flex-wrap:wrap; gap:9px; }
     .player-tags { align-items:center; display:flex; flex-wrap:wrap; gap:5px; margin:4px 0; }
@@ -28,6 +28,8 @@
     <span class="world-item totem-one">♜</span><span class="world-item obsidian-one">⬢</span>
     <span class="world-item sword-two">⚔</span><span class="world-item crystal-two">◆</span>
     <span class="world-item totem-two">♜</span><span class="world-item obsidian-two">⬢</span>
+    <span class="world-item keyboard-one">⌨</span><span class="world-item mouse-one">🖱</span>
+    <span class="world-item headset-one">🎧</span><span class="world-item obsidian-three">⬢</span>
   </div>
   <div class="app">
     <aside>
@@ -57,12 +59,11 @@
     <main>
       <header>
         <div class="player-search"><input id="player-search-input" placeholder="⌕  Search Discord or Minecraft players" autocomplete="off" aria-label="Search players by Discord ID, Discord username, or Minecraft username"><div id="player-search-results" class="player-search-results" hidden></div></div>
-        <div class="header-actions"><button id="verify" class="green">Verify Minecraft</button><span id="minecraft-verified-badge" class="verified-badge" hidden>✓ Verified</span><button id="wallet-open" class="pill" title="Open Wallet Center">● <b id="balance">0</b></button><div class="header-social"><button class="header-icon" data-social="discord" title="Discord community">◉</button><button class="header-icon" data-social="youtube" title="YouTube">▶</button><button class="header-icon" data-social="x" title="X">𝕏</button><button class="header-icon" data-social="favorites" title="Favorites">♥</button><div class="notifications"><button id="notifications-toggle" class="header-icon notification-button" title="Notifications">♟<span>0</span></button><div id="notifications-menu" class="header-popover notifications-menu" hidden><b>Notifications</b><p>You are all caught up.</p></div></div></div><div class="profile-menu-wrap"><button id="profile-menu-toggle" class="profile-menu-toggle" aria-expanded="false" title="Open profile menu"><img id="avatar" hidden><b id="username">Loading…</b><span>⌄</span></button><div id="profile-menu" class="header-popover profile-menu" hidden><div class="profile-menu-head"><img id="menu-avatar" hidden><div><b id="menu-username">Loading…</b><small id="menu-discord-id">Discord account</small></div><button id="profile-menu-close" class="profile-menu-close" aria-label="Close profile menu">×</button></div><div class="profile-menu-links"><button data-menu-view="profile">♟ Profile</button><button id="open-statistics">▥ Statistics</button><button data-social="teams">♟ Teams</button></div><form method="post" action="/auth/logout"><button class="menu-logout">↪ Log out</button></form></div></div></div>
+        <div class="header-actions"><button id="verify" class="green">Verify Minecraft</button><span id="minecraft-verified-badge" class="verified-badge" hidden>✓ Verified</span><div class="header-wallet-cluster"><button id="wallet-open" class="pill" title="Open Wallet Center">● <b id="balance">0</b></button><span class="snipe-balance" title="Available snipes">🎯 <b id="snipes">0</b></span></div><div class="header-social"><button class="header-icon" data-social="discord" title="Discord community">◉</button><button class="header-icon" data-social="youtube" title="YouTube">▶</button><button class="header-icon" data-social="x" title="X">𝕏</button><button class="header-icon" data-social="favorites" title="Favorites">♥</button><div class="notifications"><button id="notifications-toggle" class="header-icon notification-button" title="Notifications">♟<span>0</span></button><div id="notifications-menu" class="header-popover notifications-menu" hidden><b>Notifications</b><p>You are all caught up.</p></div></div></div><div class="profile-menu-wrap"><button id="profile-menu-toggle" class="profile-menu-toggle" aria-expanded="false" title="Open profile menu"><img id="avatar" hidden><b id="username">Loading…</b><span>⌄</span></button><div id="profile-menu" class="header-popover profile-menu" hidden><div class="profile-menu-head"><img id="menu-avatar" hidden><div><b id="menu-username">Loading…</b><small id="menu-discord-id">Discord account</small></div><button id="profile-menu-close" class="profile-menu-close" aria-label="Close profile menu">×</button></div><div class="profile-menu-links"><button data-menu-view="profile">♟ Profile</button><button id="open-statistics">▥ Statistics</button><button data-social="teams">♟ Teams</button></div><form method="post" action="/auth/logout"><button class="menu-logout">↪ Log out</button></form></div></div></div>
       </header>
       <section id="matches" class="view active">
         <div class="heading match-heading"><div><small>COMPETE NOW</small><h1>Live Matches</h1><p>Find an open duel, review the terms, and lock in your entry.</p></div><button id="create" class="orange">＋ Create Match</button></div>
         <div id="announcement-feed" class="announcement-feed" hidden></div>
-        <div class="cards"><article><small>OPEN MATCHES</small><b id="count">0</b></article><article><small>WINS</small><b id="wins">0</b></article><article><small>LOSSES</small><b id="losses">0</b></article><article><small>ESCROW</small><b>Setup required</b></article></div>
         <div class="match-toolbar">
           <div class="match-tabs"><button class="active" data-filter-type="status" data-filter-value="available"><span class="filter-dot"></span>Available <b id="available-filter-count">0</b></button><button data-filter-type="status" data-filter-value="ongoing">Ongoing <b>0</b></button></div>
           <div class="filters" aria-label="Match filters"><button class="active" data-match-filter="all">All matches</button><button data-match-filter="EU">◉ EU</button><button data-match-filter="NAE">◉ NAE</button><button data-match-filter="Crystal PvP">◆ CPvP</button><button data-match-filter="Sword">⚔ Sword</button></div>
@@ -112,6 +113,6 @@
   <dialog id="ban-dialog"><div class="modal ban-modal"><button class="x" data-close>×</button><h2 id="ban-dialog-title">Ban Player</h2><p id="ban-dialog-player"></p><label class="label" for="ban-reason">BAN REASON</label><textarea id="ban-reason" class="amount" maxlength="300" placeholder="Explain why this action is being taken"></textarea><label class="label" for="ban-duration">DURATION IN HOURS <small>Blank = permanent · maximum 8760</small></label><input id="ban-duration" class="amount" type="number" min="1" max="8760" placeholder="Permanent"><footer><button data-close>Cancel</button><button id="confirm-ban" class="orange">Ban Player</button></footer></div></dialog>
   <dialog id="tags-dialog"><div class="modal tags-modal"><button class="x" data-close>×</button><h2 id="tags-dialog-title">Edit Player Tags</h2><p id="tags-dialog-player"></p><label class="label" for="player-tags-input">PLAYER TAGS <small>Up to 3 · comma-separated</small></label><input id="player-tags-input" class="amount" maxlength="100" autocomplete="off" placeholder="Example: Staff, LT4 Crystal"><p class="tag-help">These badges are visible on profiles, match listings, and match rooms. The Owner badge is automatic and cannot be assigned.</p><footer><button data-close>Cancel</button><button id="save-player-tags" class="orange">Save Tags</button></footer></div></dialog>
   <div id="toast"></div>
-  <script src="/dashboard.js?v=20260902"></script>
+  <script src="/dashboard.js?v=20260902b"></script>
 </body>
 </html>

@@ -62,10 +62,11 @@ function renderOpenMatches() {
     const prize = Math.floor(wager * 1.8);
     const matchUrl = escapeHtml(m.match_url || `/matches/${m.id}`);
     return `<article class="premium-match-card reference-match-card ${isCrystal ? 'mode-crystal' : 'mode-sword'}">
-      <header><div><h2>1V1 ${modeLabel.toUpperCase()}</h2><span class="rule-chip">WIN BY 2</span></div><a class="card-detail-icon" href="${matchUrl}" aria-label="View match details">🎯</a></header>
+      <header><div><h2>1V1 ${modeLabel.toUpperCase()}</h2><span class="rule-chip">WIN BY 2</span></div>${currentUser?.id === m.creator_id ? `<a class="card-detail-icon" href="${matchUrl}" aria-label="Open your match">◎</a>` : `<button class="card-detail-icon" data-snipe="${escapeHtml(m.match_code || m.id)}" aria-label="Use a snipe to reveal this player's record" title="Snipe player">🎯</button>`}</header>
       <div class="reference-chips"><span>${region}</span><strong>${isCrystal ? 'END CRYSTAL' : 'DIAMOND SWORD'}</strong></div>
       <div class="reference-match-stats"><div><small>FIRST TO</small><b><i>⚑</i> ${escapeHtml(matchFirstTo(m))}</b></div><div><small>EXPIRES IN</small><b><i>◷</i> ${matchTimeLeft(m)}</b><em></em></div></div>
       <div class="reference-economy"><div><small>ENTRY FEE</small><b>🟡 ${tokenMillions(wager)}</b></div><span>⟶</span><div><small>PRIZE</small><b>♛ ${tokenMillions(prize)}</b></div></div>
+      ${m.snipe_profile ? `<div class="snipe-profile"><span>SNIPED PLAYER</span><b>${escapeHtml(m.snipe_profile.username)}</b><strong>${Number(m.snipe_profile.wins || 0)}W · ${Number(m.snipe_profile.losses || 0)}L</strong></div>` : ''}
       <footer><button class="join-premium" data-join="${escapeHtml(m.match_code || m.id)}">JOIN MATCH</button></footer>
     </article>`;
   }).join('') : `<div class="empty match-empty"><span>⚔</span><h2>No matching wagers found.</h2><p>Try another filter or create a new verified match.</p><button class="empty-create" type="button">Create a match</button></div>`;
@@ -87,7 +88,7 @@ async function load() {
   $('#username').textContent = me.username; $('#profile-name').textContent = me.username; $('#profile-tags').innerHTML = renderPlayerTags(me.tags);
   $('#menu-username').textContent = me.username;
   $('#menu-discord-id').textContent = me.minecraft_username ? `Playing as ${me.minecraft_username}` : 'Minecraft not verified';
-  $('#balance').textContent = Number(me.balance).toLocaleString(); $('#wallet-balance').textContent = Number(me.balance).toLocaleString(); $('#locked').textContent = Number(me.locked_balance).toLocaleString(); $('#wins').textContent = me.wins; $('#losses').textContent = me.losses;
+  $('#balance').textContent = Number(me.balance).toLocaleString(); $('#wallet-balance').textContent = Number(me.balance).toLocaleString(); $('#locked').textContent = Number(me.locked_balance).toLocaleString(); $('#snipes').textContent = Number(me.snipes || 0);
   const isMinecraftVerified = Boolean(me.minecraft_verified && me.minecraft_username);
   $('#verify').hidden = isMinecraftVerified;
   $('#minecraft-verified-badge').hidden = !isMinecraftVerified;
@@ -101,7 +102,7 @@ async function load() {
   if (!me.is_admin && $('#admin').classList.contains('active')) showView('matches');
   if (me.avatar_url) ['#avatar','#profile-avatar','#menu-avatar'].forEach(s => { const i=$(s); i.src=me.avatar_url; i.hidden=false; });
   const [matches, recentMatches, announcements] = await Promise.all([api('/api/matches'), api('/api/me/matches').catch(() => []), api('/api/announcements').catch(() => ({ announcements: [] }))]);
-  openMatches = matches; $('#count').textContent = openMatches.length; renderOpenMatches(); renderSidebarMatches(recentMatches);
+  openMatches = matches; renderOpenMatches(); renderSidebarMatches(recentMatches);
   renderAnnouncements(announcements.announcements);
 }
 document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-view]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); document.querySelectorAll('.view').forEach(x=>x.classList.remove('active')); $('#'+b.dataset.view).classList.add('active'); if (b.dataset.view === 'admin') loadAdmin(); if (b.dataset.view === 'tournaments') loadTournaments(); });
@@ -119,7 +120,15 @@ document.querySelectorAll('[data-filter-type="status"]').forEach((button) => but
 }));
 $('#list').addEventListener('click', (event) => {
   if (event.target.closest('.empty-create')) $('#create').click();
+  const snipe = event.target.closest('[data-snipe]');
+  if (snipe) useSnipe(snipe.dataset.snipe, snipe);
 });
+async function useSnipe(matchCode, button) {
+  if (!window.confirm('Use one snipe to reveal this player and their record?')) return;
+  button.disabled = true;
+  try { await api(`/api/matches/${encodeURIComponent(matchCode)}/snipe`, { method: 'POST' }); toast('Player record revealed.'); await load(); }
+  catch (error) { button.disabled = false; toast(error.message); }
+}
 document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { matchConfig.tab=b.dataset.tab; document.querySelectorAll('[data-tab]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); renderForm(); });
 document.querySelectorAll('[data-close]').forEach(b => b.onclick = () => b.closest('dialog').close());
 $('#submit').onclick = async () => { if (matchConfig.tab !== 'amount') { const order=['game','settings','amount']; const n=order.indexOf(matchConfig.tab)+1; matchConfig.tab=order[n]; document.querySelector(`[data-tab="${matchConfig.tab}"]`).click(); return; } try { const match = await api('/api/matches',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({wager_amount:matchConfig.amount,game_mode:`${matchConfig.game} · 1v1 · ${matchConfig.region}`,rules:`First to ${matchConfig.firstTo}, lead ${matchConfig.lead}`})}); location.href = match.match_url || `/matches/${match.id}`; } catch(e) { toast(e.message); } };
@@ -264,7 +273,7 @@ function stopWalletTimers() {
 function formatWalletAmount(value) { return Number(value || 0).toLocaleString(); }
 function parseWalletAmount(value) {
   const normalized = String(value || '').trim().toLowerCase().replaceAll(',', '').replaceAll(' ', '');
-  const match = normalized.match(/^(\d+(?:\.\d+)?)([kmb])?$/);
+  const match = normalized.match(/^(-?\d+(?:\.\d+)?)([kmb])?$/);
   if (!match) return null;
   const multiplier = { k: 1_000, m: 1_000_000, b: 1_000_000_000 }[match[2]] || 1;
   const amount = Number(match[1]) * multiplier;
@@ -458,11 +467,11 @@ function ensureTournamentFields() {
 }
 function tournamentCard(tournament, admin = false) {
   const status = String(tournament.status || 'OPEN');
-  const statusLabel = status === 'IN_PROGRESS' ? 'In progress' : status === 'COMPLETED' ? 'Completed' : 'Registration open';
+  const statusLabel = status === 'IN_PROGRESS' ? 'In progress' : status === 'COMPLETED' ? 'Completed' : status === 'DISABLED' ? 'Disabled' : 'Registration open';
   const standings = (tournament.standings || []).slice(0, 5).map((row, index) => `<li><b>${index + 1}</b><span>${escapeHtml(row.username)}<small>${row.minecraft_username ? escapeHtml(row.minecraft_username) : 'Minecraft verified player'}</small></span><strong>${row.points} pts · ${row.wins}W</strong></li>`).join('');
   const bracket = (tournament.matches || []).length ? `<div class="tournament-match-list"><small>MATCHES</small>${tournament.matches.map((match) => `<a href="${escapeHtml(match.match_url)}"><span>Round ${Number(match.tournament_round || 1)} · ${escapeHtml(match.creator)} vs ${escapeHtml(match.opponent || 'TBD')}</span><b>${escapeHtml(String(match.status).replaceAll('_',' '))} →</b></a>`).join('')}</div>` : '';
   const register = status === 'OPEN' && !tournament.is_registered ? `<button data-register-tournament="${escapeHtml(tournament.id)}">Register free</button>` : status === 'OPEN' ? '<button disabled>✓ Registered</button>' : '';
-  const adminAction = admin && status === 'OPEN' ? `<button data-start-tournament="${escapeHtml(tournament.id)}">Start tournament</button>` : admin && status === 'IN_PROGRESS' && tournament.format === 'LEADERBOARD' ? `<button data-end-tournament="${escapeHtml(tournament.id)}">End & pay winner</button>` : '';
+  const adminAction = admin ? `${status === 'OPEN' ? `<button data-start-tournament="${escapeHtml(tournament.id)}">Start tournament</button>` : status === 'IN_PROGRESS' && tournament.format === 'LEADERBOARD' ? `<button data-end-tournament="${escapeHtml(tournament.id)}">End & pay winner</button>` : ''}${['OPEN','DISABLED'].includes(status) ? `<button class="tournament-disable" data-toggle-tournament="${escapeHtml(tournament.id)}">${status === 'DISABLED' ? 'Enable tournament' : 'Disable tournament'}</button>` : ''}` : '';
   return `<article class="tournament-card"><div class="tournament-card-accent"></div><header><span>♛</span><div><small>${escapeHtml(tournament.format || 'BRACKET')} · FREE ENTRY</small><h2>${escapeHtml(tournament.name)}</h2></div><b class="tournament-status ${status.toLowerCase()}">${statusLabel}</b></header><div class="tournament-specs"><span><small>REGION</small><b>◉ ${escapeHtml(tournament.region)}</b></span><span><small>MODE</small><b>${tournament.game_mode === 'Crystal PvP' ? '◆ CPvP' : '⚔ Sword'}</b></span><span><small>PLAYERS</small><b>${Number(tournament.registered_count || 0)} / ${Number(tournament.max_players || 16)}</b></span><span><small>WINNER PRIZE</small><b class="tournament-prize">${Number(tournament.winner_prize || 0).toLocaleString()}</b></span></div>${standings ? `<ol class="tournament-standings">${standings}</ol>` : ''}${bracket}<footer>${admin ? adminAction : register}</footer></article>`;
 }
 function renderTournaments(tournaments, admin = false) {
@@ -497,6 +506,10 @@ async function loadAdmin() {
   if (!currentUser?.is_admin) return;
   ensureAnnouncementAdmin();
   ensureTournamentFields();
+  const balanceForm = $('#balance-credit-form');
+  balanceForm.querySelector('h2').textContent = 'Adjust a balance';
+  balanceForm.querySelector('label[for="balance-credit-amount"]').textContent = 'AMOUNT · USE - TO REMOVE';
+  balanceForm.querySelector('button[type="submit"]').textContent = 'Update balance';
   $('#admin-match-list').innerHTML = '<div class="empty"><h2>Loading admin matches…</h2></div>';
   loadTournaments(true);
   try { renderAdminMatches((await api('/api/admin/matches')).matches); }
@@ -520,19 +533,27 @@ $('#admin').addEventListener('submit', async (event) => {
 });
 $('#tournament-form').addEventListener('submit', async (event) => {
   event.preventDefault();
+  const form = event.currentTarget;
   const submitter = event.submitter;
   const prize = parseWalletAmount($('#tournament-prize').value);
   if (!prize) return toast('Enter a valid winner prize, such as 10m.');
   submitter.disabled = true;
   try {
     const result = await api('/api/admin/tournaments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: $('#tournament-name').value, region: $('#tournament-region').value, game_mode: $('#tournament-mode').value, winner_prize: prize, format: $('#tournament-format').value, max_players: Number($('#tournament-max-players').value), duration_hours: Number($('#tournament-duration').value), rules: $('#tournament-rules').value }) });
-    toast(`${result.tournament.name} created. Players can now register.`);
-    event.currentTarget.reset();
+    toast('Tournament created. Players can now register.');
+    form.reset();
     loadTournaments(true);
   } catch (error) { toast(error.message); }
   finally { submitter.disabled = false; }
 });
 $('#admin-tournament-list').addEventListener('click', async (event) => {
+  const toggleButton = event.target.closest('[data-toggle-tournament]');
+  if (toggleButton) {
+    toggleButton.disabled = true;
+    try { const result = await api(`/api/admin/tournaments/${encodeURIComponent(toggleButton.dataset.toggleTournament)}/toggle`, { method: 'POST' }); toast(`Tournament ${result.tournament.status === 'DISABLED' ? 'disabled' : 'enabled'}.`); loadTournaments(true); }
+    catch (error) { toggleButton.disabled = false; toast(error.message); }
+    return;
+  }
   const endButton = event.target.closest('[data-end-tournament]');
   if (endButton) {
     if (!window.confirm('End this leaderboard and pay the current first-place player?')) return;
@@ -556,15 +577,16 @@ $('#tournament-list').addEventListener('click', async (event) => {
 });
 $('#balance-credit-form').addEventListener('submit', async (event) => {
   event.preventDefault();
+  const form = event.currentTarget;
   const button = event.submitter;
   const amount = parseWalletAmount($('#balance-credit-amount').value);
   if (!amount) return toast('Enter a valid amount, such as 1m.');
-  if (!window.confirm(`Add ${amount.toLocaleString()} to this player's balance?`)) return;
+  if (!window.confirm(`${amount < 0 ? 'Remove' : 'Add'} ${Math.abs(amount).toLocaleString()} ${amount < 0 ? 'from' : 'to'} this player's balance?`)) return;
   button.disabled = true;
   try {
     const result = await api('/api/admin/balance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ player: $('#balance-credit-player').value, amount, reason: $('#balance-credit-reason').value }) });
-    toast(`Added ${amount.toLocaleString()} to ${result.player.username}. New balance: ${Number(result.player.balance).toLocaleString()}.`);
-    event.currentTarget.reset();
+    toast(`Balance updated for ${result.player.username}. New balance: ${Number(result.player.balance).toLocaleString()}.`);
+    form.reset();
     load();
   } catch (error) { toast(error.message); }
   finally { button.disabled = false; }

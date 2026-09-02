@@ -2,7 +2,7 @@
 
 
 /* DonutWagers 2026 polish layer */
-:root{--dw-bg:#070907;--dw-surface:#0d100d;--dw-surface-2:#121612;--dw-line:rgba(255,255,255,.1);--dw-text:#f4f7f2;--dw-muted:#969e96;--dw-lime:#b8f238;--dw-gold:#efc64c}
+:root{--dw-bg:#050605;--dw-surface:#090a09;--dw-surface-2:#11110e;--dw-line:rgba(255,255,255,.1);--dw-text:#f7f6f0;--dw-muted:#9c9a90;--dw-lime:#ffc400;--dw-gold:#ffc400}
 html{scroll-behavior:smooth}body{background-color:var(--dw-bg);-webkit-font-smoothing:antialiased}button,input,select,textarea{font:inherit}button,a{transition:background-color .18s ease,border-color .18s ease,color .18s ease,transform .18s ease,box-shadow .18s ease}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--dw-lime);outline-offset:3px}::selection{background:var(--dw-lime);color:#0c1008}
 .info-page{min-height:100vh;margin:0;background:radial-gradient(circle at 72% 8%,rgba(184,242,56,.08),transparent 28%),#070907;color:var(--dw-text);font-family:Inter,Arial,sans-serif}
 .info-header{height:74px;position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:40px;padding:0 clamp(20px,5vw,76px);border-bottom:1px solid var(--dw-line);background:rgba(7,9,7,.84);backdrop-filter:blur(18px)}

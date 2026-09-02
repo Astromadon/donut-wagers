@@ -71,6 +71,7 @@ function normalizeDb(db) {
     user.minecraft_verified ??= false;
     user.minecraft_verified_at ??= null;
     user.player_tags ??= [];
+    user.snipes ??= 3;
   }
   return db;
 }
@@ -161,6 +162,20 @@ function publicMatch(match, users) {
     cancelled_at: match.cancelled_at || null,
     created_at: match.created_at,
   };
+}
+function publicLobbyMatch(match, users, viewer) {
+  const visible = publicMatch(match, users);
+  const revealed = viewer && (viewer.id === match.creator_id || (match.sniped_by || []).includes(viewer.id));
+  if (!revealed) {
+    visible.creator_id = null;
+    visible.creator = null;
+    visible.creator_tags = [];
+    visible.creator_minecraft_username = null;
+    return visible;
+  }
+  const creator = users.find((candidate) => candidate.id === match.creator_id);
+  visible.snipe_profile = viewer.id === match.creator_id ? null : { username: creator?.discord_username || 'Unknown', wins: Number(creator?.wins || 0), losses: Number(creator?.losses || 0) };
+  return visible;
 }
 function adminMatch(match, users) {
   const creator = users.find((user) => user.id === match.creator_id);
@@ -467,7 +482,7 @@ async function handleDiscordCallback(request, response, url) {
     const db = await readDb();
     let user = db.users.find((item) => item.discord_id === profile.id);
     if (!user) {
-      user = { id: crypto.randomUUID(), discord_id: profile.id, discord_username: profile.global_name || profile.username, discord_avatar: profile.avatar || null, balance: 0, locked_balance: 0, wins: 0, losses: 0, minecraft_uuid: null, minecraft_username: null, minecraft_verified: false, minecraft_verified_at: null, player_tags: [], created_at: new Date().toISOString() };
+      user = { id: crypto.randomUUID(), discord_id: profile.id, discord_username: profile.global_name || profile.username, discord_avatar: profile.avatar || null, balance: 0, locked_balance: 0, snipes: 3, wins: 0, losses: 0, minecraft_uuid: null, minecraft_username: null, minecraft_verified: false, minecraft_verified_at: null, player_tags: [], created_at: new Date().toISOString() };
       db.users.push(user);
     } else {
       user.discord_username = profile.global_name || profile.username;
@@ -547,7 +562,7 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'GET' && url.pathname === '/api/me') {
       const user = await currentUser(request);
       if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
-      return sendJson(response, 200, { id: user.id, username: user.discord_username, discord_id: user.discord_id, avatar_url: avatarUrl(user), tags: playerTags(user), balance: availableBalance(user), total_balance: money(user.balance), locked_balance: money(user.locked_balance), wins: user.wins, losses: user.losses, minecraft_account: user.minecraft_username, minecraft_uuid: user.minecraft_uuid, minecraft_username: user.minecraft_username, minecraft_verified: user.minecraft_verified, minecraft_verified_at: user.minecraft_verified_at, is_admin: isAdmin(user), donut_smp_status: donutSmpService.status() });
+      return sendJson(response, 200, { id: user.id, username: user.discord_username, discord_id: user.discord_id, avatar_url: avatarUrl(user), tags: playerTags(user), balance: availableBalance(user), total_balance: money(user.balance), locked_balance: money(user.locked_balance), snipes: Number(user.snipes || 0), wins: user.wins, losses: user.losses, minecraft_account: user.minecraft_username, minecraft_uuid: user.minecraft_uuid, minecraft_username: user.minecraft_username, minecraft_verified: user.minecraft_verified, minecraft_verified_at: user.minecraft_verified_at, is_admin: isAdmin(user), donut_smp_status: donutSmpService.status() });
     }
     if (request.method === 'GET' && url.pathname === '/api/me/statistics') {
       const user = await currentUser(request);
@@ -587,7 +602,7 @@ const server = http.createServer(async (request, response) => {
       if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
       const db = await readDb();
       const tournaments = [...db.tournaments]
-        .filter((tournament) => tournament.status !== 'CANCELLED')
+        .filter((tournament) => tournament.status !== 'CANCELLED' && (isAdmin(user) || tournament.status !== 'DISABLED'))
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
         .map((tournament) => publicTournament(tournament, db, user));
       return sendJson(response, 200, { tournaments });
@@ -668,6 +683,23 @@ const server = http.createServer(async (request, response) => {
       });
       return sendJson(response, 201, { tournament });
     }
+    if (request.method === 'POST' && /^\/api\/admin\/tournaments\/[^/]+\/toggle$/.test(url.pathname)) {
+      const user = await currentUser(request);
+      if (!requireAdmin(response, user)) return;
+      const tournamentId = decodeURIComponent(url.pathname.split('/')[4]);
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const tournament = db.tournaments.find((item) => item.id === tournamentId);
+        if (!tournament) return { status: 404, error: 'Tournament not found.' };
+        if (['IN_PROGRESS', 'COMPLETED'].includes(tournament.status)) return { status: 409, error: 'An active or completed tournament cannot be disabled.' };
+        tournament.status = tournament.status === 'DISABLED' ? 'OPEN' : 'DISABLED';
+        tournament.disabled_at = tournament.status === 'DISABLED' ? new Date().toISOString() : null;
+        audit(db, user.id, 'tournament_status_changed', { tournament_id: tournament.id, status: tournament.status });
+        await writeDb(db);
+        return { status: 200, tournament: publicTournament(tournament, db, user) };
+      });
+      return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : { tournament: outcome.tournament });
+    }
     if (request.method === 'POST' && url.pathname === '/api/admin/announcements') {
       const user = await currentUser(request);
       if (!requireAdmin(response, user)) return;
@@ -747,7 +779,7 @@ const server = http.createServer(async (request, response) => {
       const credit = Number(amount);
       const creditReason = String(reason || 'Owner balance adjustment').trim().slice(0, 160);
       if (playerQuery.length < 2 || playerQuery.length > 64) return sendJson(response, 400, { error: 'Enter a Discord ID, Discord username, or verified Minecraft username.' });
-      if (!Number.isSafeInteger(credit) || credit < 1 || credit > 1_000_000_000_000) return sendJson(response, 400, { error: 'Enter a whole-number credit from 1 to 1 trillion.' });
+      if (!Number.isSafeInteger(credit) || credit === 0 || Math.abs(credit) > 1_000_000_000_000) return sendJson(response, 400, { error: 'Enter a non-zero whole-number adjustment up to 1 trillion.' });
       try {
         const result = await withEscrowMutation(async () => {
           const db = await readDb();
@@ -755,8 +787,10 @@ const server = http.createServer(async (request, response) => {
           if (!matches.length) throw Object.assign(new Error('Player not found. Use an exact Discord ID, Discord username, or verified Minecraft username.'), { statusCode: 404 });
           if (matches.length > 1) throw Object.assign(new Error('More than one player has that name. Use the exact Discord ID.'), { statusCode: 409 });
           const target = matches[0];
-          target.balance = money(target.balance) + credit;
-          audit(db, user.id, 'admin_balance_added', { target_user_id: target.id, amount: credit, reason: creditReason, new_balance: target.balance });
+          const nextBalance = money(target.balance) + credit;
+          if (nextBalance < money(target.locked_balance)) throw Object.assign(new Error('You cannot remove funds that are locked in active matches or withdrawals.'), { statusCode: 409 });
+          target.balance = nextBalance;
+          audit(db, user.id, 'admin_balance_adjusted', { target_user_id: target.id, amount: credit, reason: creditReason, new_balance: target.balance });
           await writeDb(db);
           return { username: target.discord_username, discord_id: target.discord_id, balance: target.balance };
         });
@@ -1143,8 +1177,32 @@ const server = http.createServer(async (request, response) => {
       return sendJson(response, 200, { verified: true, deposit: publicWalletDeposit(deposit), balance: availableBalance(storedUser) });
     }
     if (request.method === 'GET' && url.pathname === '/api/matches') {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
       const db = await readDb();
-      return sendJson(response, 200, db.matches.filter((match) => ['OPEN', 'PLAYER_1_DEPOSIT_PENDING'].includes(match.status)).map((match) => publicMatch(match, db.users)));
+      return sendJson(response, 200, db.matches.filter((match) => ['OPEN', 'PLAYER_1_DEPOSIT_PENDING'].includes(match.status)).map((match) => publicLobbyMatch(match, db.users, user)));
+    }
+    if (request.method === 'POST' && /^\/api\/matches\/[^/]+\/snipe$/.test(url.pathname)) {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      const code = decodeURIComponent(url.pathname.split('/')[3]);
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const storedUser = db.users.find((candidate) => candidate.id === user.id);
+        const match = findMatch(db, code);
+        if (!storedUser || !match || !['OPEN', 'PLAYER_1_DEPOSIT_PENDING'].includes(match.status)) return { status: 404, error: 'That match is no longer available.' };
+        if (match.creator_id === storedUser.id) return { status: 400, error: 'You already know the player who created your own match.' };
+        match.sniped_by ??= [];
+        if (!match.sniped_by.includes(storedUser.id)) {
+          if (Number(storedUser.snipes || 0) < 1) return { status: 409, error: 'You do not have any snipes available.' };
+          storedUser.snipes = Number(storedUser.snipes || 0) - 1;
+          match.sniped_by.push(storedUser.id);
+          audit(db, storedUser.id, 'match_sniped', { wager_id: match.id });
+          await writeDb(db);
+        }
+        return { status: 200, match: publicLobbyMatch(match, db.users, storedUser), snipes: storedUser.snipes };
+      });
+      return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : outcome);
     }
     if (request.method === 'GET' && url.pathname === '/api/me/matches') {
       const user = await currentUser(request);
@@ -1158,10 +1216,13 @@ const server = http.createServer(async (request, response) => {
       return sendJson(response, 200, matches);
     }
     if (request.method === 'GET' && /^\/api\/matches\/[^/]+$/.test(url.pathname)) {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
       const db = await readDb();
       const match = findMatch(db, decodeURIComponent(url.pathname.split('/')[3]));
       if (!match) return sendJson(response, 404, { error: 'Match not found.' });
-      return sendJson(response, 200, publicMatch(match, db.users));
+      const open = ['OPEN', 'PLAYER_1_DEPOSIT_PENDING'].includes(match.status);
+      return sendJson(response, 200, open ? publicLobbyMatch(match, db.users, user) : publicMatch(match, db.users));
     }
     if (request.method === 'POST' && /^\/api\/matches\/[^/]+\/result$/.test(url.pathname)) {
       const user = await currentUser(request);
