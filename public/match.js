@@ -74,6 +74,8 @@ function activateTimeline(match) {
   $('#complete-step').classList.toggle('active', complete);
 }
 function render(match, viewer) {
+  $('#top-balance').textContent = Number(viewer?.balance || 0).toLocaleString();
+  $('#top-snipes').textContent = Number(viewer?.snipes || 0).toLocaleString();
   document.title = `${game(match)} · DonutWagers`;
   $('#match-title').textContent = `1v1 ${game(match)}`;
   $('#match-created').textContent = match.tournament_id ? `${match.tournament_name} · Round ${match.tournament_round} · Match ${match.match_code}` : `Match ${match.match_code} · Created ${new Date(match.created_at).toLocaleString()}`;
