@@ -31,6 +31,16 @@ function matchRegion(mode) {
 function compactMode(match) {
   return /crystal|cpvp/i.test(String(match.game_mode || '')) ? 'CPvP' : 'Sword';
 }
+function matchFirstTo(match) {
+  return String(match.rules || '').match(/First to\s+([^,;]+)/i)?.[1]?.trim() || '5+2';
+}
+function matchTimeLeft(match) {
+  const remaining = Math.max(0, new Date(match.created_at).getTime() + 30 * 60_000 - Date.now());
+  const minutes = Math.floor(remaining / 60_000);
+  const seconds = Math.floor((remaining % 60_000) / 1000);
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+function tokenMillions(value) { return (Number(value || 0) / 1_000_000).toFixed(2); }
 function renderSidebarMatches(recentMatches = []) {
   const live = openMatches.slice(0, 3);
   $('#sidebar-live-matches').innerHTML = live.length ? live.map((match) => `<a class="sidebar-match-link" href="${escapeHtml(match.match_url || `/matches/${match.id}`)}"><span>${compactMode(match)}</span><small>${matchRegion(match.game_mode)} · ${Number(match.wager_amount || 0).toLocaleString()}</small><b>Join →</b></a>`).join('') : '';
@@ -45,24 +55,18 @@ function renderOpenMatches() {
   });
   $('#available-filter-count').textContent = openMatches.length;
   $('#list').innerHTML = visible.length ? visible.map((m) => {
-    const creator = escapeHtml(m.creator);
-    const minecraftName = m.creator_minecraft_username ? escapeHtml(m.creator_minecraft_username) : '';
     const isCrystal = /crystal|cpvp/i.test(String(m.game_mode || ''));
     const modeLabel = isCrystal ? 'Crystal PvP' : 'Sword Duel';
     const region = matchRegion(m.game_mode);
     const wager = Number(m.wager_amount || 0);
     const prize = Math.floor(wager * 1.8);
     const matchUrl = escapeHtml(m.match_url || `/matches/${m.id}`);
-    const playingAs = minecraftName
-      ? `<span class="match-minecraft">Playing as <b>${minecraftName}</b><button class="copy-minecraft" data-copy-minecraft="${minecraftName}" aria-label="Copy ${minecraftName}'s Minecraft username" title="Copy Minecraft username">⧉</button></span>`
-      : '<span class="match-minecraft muted">Minecraft pending</span>';
-    return `<article class="premium-match-card ${isCrystal ? 'mode-crystal' : 'mode-sword'}">
-      <div class="match-card-accent"></div>
-      <header><span class="mode-symbol">${isCrystal ? '◆' : '⚔'}</span><div><small>1V1 DUEL</small><h2>${modeLabel}</h2></div><span class="open-status"><i></i> Open</span></header>
-      <div class="match-host"><span class="host-avatar">${creator.slice(0,1) || '?'}</span><div><small>HOSTED BY</small><strong>${creator}</strong>${renderPlayerTags(m.creator_tags, 'match-tags')}${playingAs}</div></div>
-      <div class="match-specs"><div><small>REGION</small><b>◉ ${region}</b></div><div><small>FORMAT</small><b>1v1</b></div><div><small>RULES</small><b>${escapeHtml(m.rules || 'Standard')}</b></div></div>
-      <div class="match-economy"><div><small>ENTRY</small><strong>${wager.toLocaleString()}</strong></div><span>→</span><div><small>WINNER RECEIVES</small><strong>${prize.toLocaleString()}</strong></div></div>
-      <footer><a class="match-details" href="${matchUrl}">View details</a><button class="join-premium" data-join="${escapeHtml(m.match_code || m.id)}">Join match <span>→</span></button></footer>
+    return `<article class="premium-match-card reference-match-card ${isCrystal ? 'mode-crystal' : 'mode-sword'}">
+      <header><div><h2>1V1 ${modeLabel.toUpperCase()}</h2><span class="rule-chip">WIN BY 2</span></div><a class="card-detail-icon" href="${matchUrl}" aria-label="View match details">🎯</a></header>
+      <div class="reference-chips"><span>${region}</span><strong>${isCrystal ? 'END CRYSTAL' : 'DIAMOND SWORD'}</strong></div>
+      <div class="reference-match-stats"><div><small>FIRST TO</small><b><i>⚑</i> ${escapeHtml(matchFirstTo(m))}</b></div><div><small>EXPIRES IN</small><b><i>◷</i> ${matchTimeLeft(m)}</b><em></em></div></div>
+      <div class="reference-economy"><div><small>ENTRY FEE</small><b>🟡 ${tokenMillions(wager)}</b></div><span>⟶</span><div><small>PRIZE</small><b>♛ ${tokenMillions(prize)}</b></div></div>
+      <footer><button class="join-premium" data-join="${escapeHtml(m.match_code || m.id)}">JOIN MATCH</button></footer>
     </article>`;
   }).join('') : `<div class="empty match-empty"><span>⚔</span><h2>No matching wagers found.</h2><p>Try another filter or create a new verified match.</p><button class="empty-create" type="button">Create a match</button></div>`;
 }
@@ -101,6 +105,7 @@ async function load() {
   renderAnnouncements(announcements.announcements);
 }
 document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-view]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); document.querySelectorAll('.view').forEach(x=>x.classList.remove('active')); $('#'+b.dataset.view).classList.add('active'); if (b.dataset.view === 'admin') loadAdmin(); if (b.dataset.view === 'tournaments') loadTournaments(); });
+document.querySelectorAll('[data-sidebar-coming]').forEach((button) => button.onclick = () => toast(`${button.dataset.sidebarComing} is coming soon.`));
 $('#create').onclick = () => { matchConfig.tab='game'; document.querySelectorAll('[data-tab]').forEach(t=>t.classList.toggle('active',t.dataset.tab==='game')); renderForm(); $('#match-dialog').showModal(); };
 document.querySelectorAll('[data-match-filter]').forEach((button) => button.addEventListener('click', () => {
   activeMatchFilter = button.dataset.matchFilter;
