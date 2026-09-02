@@ -97,3 +97,4 @@ body{background:var(--brand-black)!important}.app aside{background:#050605!impor
 @media(min-width:1380px){.match-card-grid{grid-template-columns:repeat(4,minmax(250px,1fr))}}
 @media(max-width:850px){.header-wallet-cluster{left:auto!important;right:72px;translate:0 -50%}.snipe-balance{padding:0 8px}.app main>header .header-wallet-cluster #wallet-open{min-width:105px}}
 @media(max-width:650px){.header-wallet-cluster{left:50%!important;right:auto;translate:-50% -50%}.snipe-balance{min-height:36px}.app main>header .header-wallet-cluster #wallet-open{min-width:90px!important}.match-heading h1{margin-bottom:8px}.reference-match-card{border-radius:13px!important}}
+.balance-actions{margin-top:3px}.balance-actions .danger-action{border-color:#71352f!important;background:#2b1210!important;color:#ffaaa1!important}.balance-actions .danger-action:hover{border-color:#a95047!important;background:#3a1714!important}

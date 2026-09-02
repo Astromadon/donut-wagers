@@ -799,6 +799,34 @@ const server = http.createServer(async (request, response) => {
         return sendJson(response, error.statusCode || 500, { error: error.message || 'Balance could not be updated.' });
       }
     }
+    if (request.method === 'POST' && url.pathname === '/api/admin/snipes') {
+      const user = await currentUser(request);
+      if (!requireAdmin(response, user)) return;
+      const { player, amount, reason } = await readJson(request);
+      const playerQuery = String(player || '').trim().toLowerCase();
+      const adjustment = Number(amount);
+      const adjustmentReason = String(reason || 'Owner snipe adjustment').trim().slice(0, 160);
+      if (playerQuery.length < 2 || playerQuery.length > 64) return sendJson(response, 400, { error: 'Enter a Discord ID, Discord username, or verified Minecraft username.' });
+      if (!Number.isSafeInteger(adjustment) || adjustment === 0 || Math.abs(adjustment) > 10000) return sendJson(response, 400, { error: 'Enter a non-zero whole-number adjustment from -10,000 to 10,000.' });
+      try {
+        const result = await withEscrowMutation(async () => {
+          const db = await readDb();
+          const matches = db.users.filter((candidate) => [candidate.discord_id, candidate.discord_username, candidate.minecraft_verified ? candidate.minecraft_username : ''].some((value) => String(value || '').toLowerCase() === playerQuery));
+          if (!matches.length) throw Object.assign(new Error('Player not found. Use an exact Discord ID, Discord username, or verified Minecraft username.'), { statusCode: 404 });
+          if (matches.length > 1) throw Object.assign(new Error('More than one player has that name. Use the exact Discord ID.'), { statusCode: 409 });
+          const target = matches[0];
+          const nextSnipes = Number(target.snipes || 0) + adjustment;
+          if (nextSnipes < 0) throw Object.assign(new Error('This adjustment would make the player’s snipe balance negative.'), { statusCode: 409 });
+          target.snipes = nextSnipes;
+          audit(db, user.id, 'admin_snipes_adjusted', { target_user_id: target.id, amount: adjustment, reason: adjustmentReason, new_snipes: target.snipes });
+          await writeDb(db);
+          return { username: target.discord_username, discord_id: target.discord_id, snipes: target.snipes };
+        });
+        return sendJson(response, 200, { player: result });
+      } catch (error) {
+        return sendJson(response, error.statusCode || 500, { error: error.message || 'Snipe balance could not be updated.' });
+      }
+    }
     if (request.method === 'POST' && /^\/api\/admin\/matches\/[^/]+\/resolve$/.test(url.pathname)) {
       const user = await currentUser(request);
       if (!requireAdmin(response, user)) return;

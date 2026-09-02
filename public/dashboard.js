@@ -456,6 +456,11 @@ function ensureAnnouncementAdmin() {
   if (!grid || $('#announcement-form')) return;
   grid.insertAdjacentHTML('beforeend', `<form id="announcement-form" class="admin-control-card announcement-admin-card"><small>COMMUNITY CONTROL</small><h2>Post an announcement</h2><label class="label" for="announcement-title">TITLE</label><input id="announcement-title" class="amount" maxlength="100" placeholder="Tournament starting soon" required><label class="label" for="announcement-message">MESSAGE</label><textarea id="announcement-message" class="amount" maxlength="2000" placeholder="Write the announcement players will see..." required></textarea><label class="discord-publish-option"><input id="announcement-discord" type="checkbox" checked><span><b>Post through Discord bot</b><small>Also sends this to your configured announcements channel.</small></span></label><button type="submit" class="orange">Publish announcement</button></form>`);
 }
+function ensureSnipeAdmin() {
+  const grid = document.querySelector('#admin .admin-control-grid');
+  if (!grid || $('#snipe-adjust-form')) return;
+  grid.insertAdjacentHTML('beforeend', `<form id="snipe-adjust-form" class="admin-control-card"><small>SNIPE CONTROL</small><h2>Adjust player snipes</h2><label class="label" for="snipe-adjust-player">PLAYER</label><input id="snipe-adjust-player" class="amount" placeholder="Discord ID, username, or Minecraft name" required><label class="label" for="snipe-adjust-amount">AMOUNT · USE - TO REMOVE</label><input id="snipe-adjust-amount" class="amount" type="number" step="1" placeholder="Example: 5 or -2" required><label class="label" for="snipe-adjust-reason">REASON</label><input id="snipe-adjust-reason" class="amount" maxlength="160" placeholder="Owner snipe adjustment"><button type="submit" class="orange">Update snipes</button></form>`);
+}
 function ensureTournamentFields() {
   const prize = $('#tournament-prize');
   if (!prize || $('#tournament-format')) return;
@@ -506,10 +511,13 @@ async function loadAdmin() {
   if (!currentUser?.is_admin) return;
   ensureAnnouncementAdmin();
   ensureTournamentFields();
+  ensureSnipeAdmin();
   const balanceForm = $('#balance-credit-form');
   balanceForm.querySelector('h2').textContent = 'Adjust a balance';
-  balanceForm.querySelector('label[for="balance-credit-amount"]').textContent = 'AMOUNT · USE - TO REMOVE';
-  balanceForm.querySelector('button[type="submit"]').textContent = 'Update balance';
+  balanceForm.querySelector('label[for="balance-credit-amount"]').textContent = 'CASH AMOUNT';
+  balanceForm.querySelector('#balance-credit-amount').placeholder = 'Example: 5m';
+  const balanceButton = balanceForm.querySelector('button[type="submit"]');
+  if (balanceButton && !balanceForm.querySelector('[data-balance-direction]')) balanceButton.outerHTML = '<div class="admin-form-actions balance-actions"><button type="submit" data-balance-direction="add" class="orange">＋ Add cash</button><button type="submit" data-balance-direction="remove" class="danger-action">− Remove cash</button></div>';
   $('#admin-match-list').innerHTML = '<div class="empty"><h2>Loading admin matches…</h2></div>';
   loadTournaments(true);
   try { renderAdminMatches((await api('/api/admin/matches')).matches); }
@@ -528,6 +536,23 @@ $('#admin').addEventListener('submit', async (event) => {
     $('#announcement-discord').checked = true;
     const announcements = await api('/api/announcements');
     renderAnnouncements(announcements.announcements);
+  } catch (error) { toast(error.message); }
+  finally { button.disabled = false; }
+});
+$('#admin').addEventListener('submit', async (event) => {
+  if (event.target.id !== 'snipe-adjust-form') return;
+  event.preventDefault();
+  const form = event.target;
+  const button = event.submitter;
+  const amount = Number($('#snipe-adjust-amount').value);
+  if (!Number.isSafeInteger(amount) || amount === 0) return toast('Enter a positive or negative whole number of snipes.');
+  if (!window.confirm(`${amount < 0 ? 'Remove' : 'Add'} ${Math.abs(amount)} snipes ${amount < 0 ? 'from' : 'to'} this player?`)) return;
+  button.disabled = true;
+  try {
+    const result = await api('/api/admin/snipes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ player: $('#snipe-adjust-player').value, amount, reason: $('#snipe-adjust-reason').value }) });
+    toast(`${result.player.username} now has ${Number(result.player.snipes).toLocaleString()} snipes.`);
+    form.reset();
+    load();
   } catch (error) { toast(error.message); }
   finally { button.disabled = false; }
 });
@@ -579,9 +604,11 @@ $('#balance-credit-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const button = event.submitter;
-  const amount = parseWalletAmount($('#balance-credit-amount').value);
-  if (!amount) return toast('Enter a valid amount, such as 1m.');
-  if (!window.confirm(`${amount < 0 ? 'Remove' : 'Add'} ${Math.abs(amount).toLocaleString()} ${amount < 0 ? 'from' : 'to'} this player's balance?`)) return;
+  const parsedAmount = parseWalletAmount($('#balance-credit-amount').value);
+  if (!parsedAmount) return toast('Enter a valid cash amount, such as 1m.');
+  const removing = button?.dataset.balanceDirection === 'remove';
+  const amount = Math.abs(parsedAmount) * (removing ? -1 : 1);
+  if (!window.confirm(`${removing ? 'Remove' : 'Add'} ${Math.abs(amount).toLocaleString()} ${removing ? 'from' : 'to'} this player's cash balance?`)) return;
   button.disabled = true;
   try {
     const result = await api('/api/admin/balance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ player: $('#balance-credit-player').value, amount, reason: $('#balance-credit-reason').value }) });
