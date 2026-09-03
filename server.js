@@ -71,6 +71,9 @@ function normalizeDb(db) {
     user.minecraft_verified ??= false;
     user.minecraft_verified_at ??= null;
     user.player_tags ??= [];
+    if (ADMIN_DISCORD_ID && String(user.discord_id || '') === ADMIN_DISCORD_ID && !user.player_tags.some((tag) => String(tag).trim().toLowerCase() === 'owner')) {
+      user.player_tags = ['Owner', ...user.player_tags.filter((tag) => String(tag).trim().toLowerCase() !== 'owner').slice(0, MAX_PLAYER_TAGS - 1)];
+    }
     user.snipes ??= 3;
   }
   return db;
@@ -322,7 +325,7 @@ function publicWithdrawal(withdrawal) {
   return { id: withdrawal.id, status: withdrawal.status, amount: withdrawal.amount, minecraft_username: withdrawal.minecraft_username, created_at: withdrawal.created_at, completed_at: withdrawal.completed_at || null, error: withdrawal.error || null };
 }
 function avatarUrl(user) { return user.discord_avatar ? `https://cdn.discordapp.com/avatars/${user.discord_id}/${user.discord_avatar}.png?size=128` : null; }
-function isAdmin(user) { return Boolean(ADMIN_DISCORD_ID && user?.discord_id && safeEqual(String(user.discord_id), ADMIN_DISCORD_ID)); }
+function isAdmin(user) { return Boolean(Array.isArray(user?.player_tags) && user.player_tags.some((tag) => String(tag).trim().toLowerCase() === 'owner')); }
 const MAX_PLAYER_TAGS = 3;
 function normalizePlayerTags(rawTags) {
   if (!Array.isArray(rawTags)) throw new Error('Tags must be provided as a list.');
@@ -341,8 +344,11 @@ function normalizePlayerTags(rawTags) {
   return tags;
 }
 function playerTags(user) {
-  // Ownership is based only on the configured Discord ID, never on an editable tag.
-  if (isAdmin(user)) return ['Owner'];
+  if (isAdmin(user)) {
+    const additionalTags = (user.player_tags || []).filter((tag) => String(tag).trim().toLowerCase() !== 'owner');
+    try { return ['Owner', ...normalizePlayerTags(additionalTags).slice(0, MAX_PLAYER_TAGS - 1)]; }
+    catch { return ['Owner']; }
+  }
   try { return normalizePlayerTags(Array.isArray(user?.player_tags) ? user.player_tags : []); }
   catch { return []; }
 }
