@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const { DonutWagersBotService, IntegrationNotConfiguredError } = require('./minecraft-service');
 const { DiscordTicketService, DiscordTicketServiceError } = require('./discord-ticket-service');
 const { createPostgresStore } = require('./postgres-store');
+const { lookupPlayerTiers } = require('./tier-service');
 
 loadEnvFile();
 const PORT = Number(process.env.PORT || 3000);
@@ -71,6 +72,9 @@ function normalizeDb(db) {
     user.minecraft_verified ??= false;
     user.minecraft_verified_at ??= null;
     user.player_tags ??= [];
+    user.tier_badge ??= null;
+    user.tier_results ??= [];
+    user.tier_checked_at ??= null;
     if (ADMIN_DISCORD_ID && String(user.discord_id || '') === ADMIN_DISCORD_ID && !user.player_tags.some((tag) => String(tag).trim().toLowerCase() === 'owner')) {
       user.player_tags = ['Owner', ...user.player_tags.filter((tag) => String(tag).trim().toLowerCase() !== 'owner').slice(0, MAX_PLAYER_TAGS - 1)];
     }
@@ -149,9 +153,11 @@ function publicMatch(match, users) {
     opponent_id: match.opponent_id || null,
     creator: creator?.discord_username || 'Unknown',
     creator_tags: playerTags(creator),
+    creator_tier_badge: playerTierBadge(creator),
     creator_minecraft_username: creator?.minecraft_verified ? creator.minecraft_username : null,
     opponent: opponent?.discord_username || null,
     opponent_tags: playerTags(opponent),
+    opponent_tier_badge: playerTierBadge(opponent),
     opponent_minecraft_username: opponent?.minecraft_verified ? opponent.minecraft_username : null,
     winner: match.winner_id ? users.find((user) => user.id === match.winner_id)?.discord_username || null : null,
     result_state: match.result_state || null,
@@ -173,12 +179,17 @@ function publicLobbyMatch(match, users, viewer) {
     visible.creator_id = null;
     visible.creator = null;
     visible.creator_tags = [];
+    visible.creator_tier_badge = null;
     visible.creator_minecraft_username = null;
     return visible;
   }
   const creator = users.find((candidate) => candidate.id === match.creator_id);
   visible.snipe_profile = viewer.id === match.creator_id ? null : { username: creator?.discord_username || 'Unknown', wins: Number(creator?.wins || 0), losses: Number(creator?.losses || 0) };
   return visible;
+}
+function publicChatMessage(message, users) {
+  const sender = users.find((candidate) => candidate.id === message.user_id);
+  return { id: message.id, user_id: message.user_id, username: sender?.discord_username || 'Unknown', avatar_url: avatarUrl(sender), body: String(message.body || ''), created_at: message.created_at };
 }
 function adminMatch(match, users) {
   const creator = users.find((user) => user.id === match.creator_id);
@@ -324,7 +335,7 @@ function publicWithdrawal(withdrawal) {
   if (!withdrawal) return null;
   return { id: withdrawal.id, status: withdrawal.status, amount: withdrawal.amount, minecraft_username: withdrawal.minecraft_username, created_at: withdrawal.created_at, completed_at: withdrawal.completed_at || null, error: withdrawal.error || null };
 }
-function avatarUrl(user) { return user.discord_avatar ? `https://cdn.discordapp.com/avatars/${user.discord_id}/${user.discord_avatar}.png?size=128` : null; }
+function avatarUrl(user) { return user?.discord_avatar ? `https://cdn.discordapp.com/avatars/${user.discord_id}/${user.discord_avatar}.png?size=128` : null; }
 function isAdmin(user) { return Boolean(Array.isArray(user?.player_tags) && user.player_tags.some((tag) => String(tag).trim().toLowerCase() === 'owner')); }
 const MAX_PLAYER_TAGS = 3;
 function normalizePlayerTags(rawTags) {
@@ -352,6 +363,11 @@ function playerTags(user) {
   try { return normalizePlayerTags(Array.isArray(user?.player_tags) ? user.player_tags : []); }
   catch { return []; }
 }
+function playerTierBadge(user) {
+  const badge = user?.tier_badge;
+  if (!badge || !/^(mctiers|pvptiers|mcpvp)$/.test(String(badge.source)) || !/^(HT|MT|LT)[1-5]$/.test(String(badge.tier))) return null;
+  return { source: badge.source, label: String(badge.label || ''), logo: String(badge.logo || ''), tier: badge.tier, mode: String(badge.mode || '') };
+}
 function requireAdmin(response, user) {
   if (!user) { sendJson(response, 401, { error: 'Authentication required.' }); return false; }
   if (!isAdmin(user)) { sendJson(response, 403, { error: 'Administrator access is required.' }); return false; }
@@ -364,6 +380,7 @@ function playerOverview(db, user) {
     discord_id: user.discord_id,
     avatar_url: avatarUrl(user),
     tags: playerTags(user),
+    tier_badge: playerTierBadge(user),
     minecraft_username: user.minecraft_verified ? user.minecraft_username : null,
     minecraft_verified: Boolean(user.minecraft_verified),
     wins: Number(user.wins || 0),
@@ -550,8 +567,13 @@ const server = http.createServer(async (request, response) => {
       if (query.length < 2) return sendJson(response, 200, { players: [] });
       if (query.length > 64) return sendJson(response, 400, { error: 'Search queries must be 64 characters or fewer.' });
       const db = await readDb();
+      const searchValues = (candidate) => [candidate.discord_id, candidate.discord_username, candidate.minecraft_verified ? candidate.minecraft_username : ''].map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
       const players = db.users
-        .filter((candidate) => [candidate.discord_id, candidate.discord_username, candidate.minecraft_verified ? candidate.minecraft_username : ''].some((value) => String(value || '').toLowerCase().includes(query)))
+        .filter((candidate) => searchValues(candidate).some((value) => value.includes(query)))
+        .sort((left, right) => {
+          const rank = (candidate) => searchValues(candidate).some((value) => value === query) ? 0 : searchValues(candidate).some((value) => value.startsWith(query)) ? 1 : 2;
+          return rank(left) - rank(right) || String(left.discord_username || '').localeCompare(String(right.discord_username || ''));
+        })
         .slice(0, 12)
         .map((candidate) => playerOverview(db, candidate));
       return sendJson(response, 200, { players });
@@ -568,7 +590,7 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'GET' && url.pathname === '/api/me') {
       const user = await currentUser(request);
       if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
-      return sendJson(response, 200, { id: user.id, username: user.discord_username, discord_id: user.discord_id, avatar_url: avatarUrl(user), tags: playerTags(user), balance: availableBalance(user), total_balance: money(user.balance), locked_balance: money(user.locked_balance), snipes: Number(user.snipes || 0), wins: user.wins, losses: user.losses, minecraft_account: user.minecraft_username, minecraft_uuid: user.minecraft_uuid, minecraft_username: user.minecraft_username, minecraft_verified: user.minecraft_verified, minecraft_verified_at: user.minecraft_verified_at, is_admin: isAdmin(user), donut_smp_status: donutSmpService.status() });
+      return sendJson(response, 200, { id: user.id, username: user.discord_username, discord_id: user.discord_id, avatar_url: avatarUrl(user), tags: playerTags(user), tier_badge: playerTierBadge(user), balance: availableBalance(user), total_balance: money(user.balance), locked_balance: money(user.locked_balance), snipes: Number(user.snipes || 0), wins: user.wins, losses: user.losses, minecraft_account: user.minecraft_username, minecraft_uuid: user.minecraft_uuid, minecraft_username: user.minecraft_username, minecraft_verified: user.minecraft_verified, minecraft_verified_at: user.minecraft_verified_at, is_admin: isAdmin(user), donut_smp_status: donutSmpService.status() });
     }
     if (request.method === 'GET' && url.pathname === '/api/me/statistics') {
       const user = await currentUser(request);
@@ -583,6 +605,7 @@ const server = http.createServer(async (request, response) => {
         discord_id: user.discord_id,
         avatar_url: avatarUrl(user),
         tags: playerTags(user),
+        tier_badge: playerTierBadge(user),
         member_since: user.created_at,
         wins: Number(user.wins || 0),
         losses: Number(user.losses || 0),
@@ -1014,8 +1037,12 @@ const server = http.createServer(async (request, response) => {
       db.minecraft_accounts = db.minecraft_accounts.filter((item) => item.user_id !== record.user_id);
       db.minecraft_accounts.push({ user_id: record.user_id, minecraft_uuid: senderUuid, minecraft_username: senderUsername, verified: true, verified_at: now, created_at: now, updated_at: now, verification_method: 'bot_private_message' });
       const storedUser = db.users.find((item) => item.id === record.user_id);
-      Object.assign(storedUser, { minecraft_uuid: senderUuid, minecraft_username: senderUsername, minecraft_verified: true, minecraft_verified_at: now });
+      let tierLookup = { best: null, results: [], checked_at: now, provider_errors: [] };
+      try { tierLookup = await lookupPlayerTiers({ uuid: senderUuid, username: senderUsername }); }
+      catch (error) { tierLookup.provider_errors = [error.message || 'Tier lookup failed.']; }
+      Object.assign(storedUser, { minecraft_uuid: senderUuid, minecraft_username: senderUsername, minecraft_verified: true, minecraft_verified_at: now, tier_badge: tierLookup.best, tier_results: tierLookup.results, tier_checked_at: tierLookup.checked_at });
       audit(db, record.user_id, 'minecraft_verified', { minecraft_uuid: senderUuid, minecraft_username: senderUsername, verification_method: 'bot_private_message' });
+      audit(db, record.user_id, 'minecraft_tiers_checked', { tier_badge: tierLookup.best, provider_errors: tierLookup.provider_errors });
       await writeDb(db);
       return sendJson(response, 200, { verified: true, minecraftUuid: senderUuid, minecraft_uuid: senderUuid, minecraftUsername: senderUsername, minecraft_username: senderUsername });
     }
@@ -1257,6 +1284,43 @@ const server = http.createServer(async (request, response) => {
       if (!match) return sendJson(response, 404, { error: 'Match not found.' });
       const open = ['OPEN', 'PLAYER_1_DEPOSIT_PENDING'].includes(match.status);
       return sendJson(response, 200, open ? publicLobbyMatch(match, db.users, user) : publicMatch(match, db.users));
+    }
+    if (request.method === 'GET' && /^\/api\/matches\/[^/]+\/chat$/.test(url.pathname)) {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Sign in to view match chat.' });
+      const db = await readDb();
+      const match = findMatch(db, decodeURIComponent(url.pathname.split('/')[3]));
+      if (!match) return sendJson(response, 404, { error: 'Match not found.' });
+      if (![match.creator_id, match.opponent_id].includes(user.id) && !isAdmin(user)) return sendJson(response, 403, { error: 'Only match participants can view this chat.' });
+      const messages = (Array.isArray(match.chat_messages) ? match.chat_messages : []).slice(-100).map((message) => publicChatMessage(message, db.users));
+      return sendJson(response, 200, { messages, can_send: [match.creator_id, match.opponent_id].includes(user.id) && !['COMPLETED', 'CANCELLED'].includes(match.status) });
+    }
+    if (request.method === 'POST' && /^\/api\/matches\/[^/]+\/chat$/.test(url.pathname)) {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Sign in to send a chat message.' });
+      const { message } = await readJson(request);
+      const body = String(message || '').trim().replace(/\s+/g, ' ');
+      if (!body) return sendJson(response, 400, { error: 'Type a message first.' });
+      if (body.length > 500) return sendJson(response, 400, { error: 'Messages can be at most 500 characters.' });
+      const code = decodeURIComponent(url.pathname.split('/')[3]);
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const match = findMatch(db, code);
+        if (!match) return { status: 404, error: 'Match not found.' };
+        if (![match.creator_id, match.opponent_id].includes(user.id)) return { status: 403, error: 'Only match participants can send messages.' };
+        if (['COMPLETED', 'CANCELLED'].includes(match.status)) return { status: 409, error: 'This match chat is read-only.' };
+        if (activeBan(db, user.id)) return { status: 403, error: 'Banned accounts cannot send messages.' };
+        match.chat_messages ??= [];
+        const lastMessage = [...match.chat_messages].reverse().find((item) => item.user_id === user.id);
+        if (lastMessage && Date.now() - new Date(lastMessage.created_at).getTime() < 1000) return { status: 429, error: 'Please wait a moment before sending another message.' };
+        const chatMessage = { id: crypto.randomUUID(), user_id: user.id, body, created_at: new Date().toISOString() };
+        match.chat_messages.push(chatMessage);
+        if (match.chat_messages.length > 200) match.chat_messages = match.chat_messages.slice(-200);
+        audit(db, user.id, 'match_chat_message_sent', { wager_id: match.id, message_id: chatMessage.id });
+        await writeDb(db);
+        return { status: 201, message: publicChatMessage(chatMessage, db.users) };
+      });
+      return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : { message: outcome.message });
     }
     if (request.method === 'POST' && /^\/api\/matches\/[^/]+\/result$/.test(url.pathname)) {
       const user = await currentUser(request);

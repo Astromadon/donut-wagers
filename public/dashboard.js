@@ -18,10 +18,11 @@ function tagStyle(tag) {
   if (normalized === 'staff') return 'staff';
   return 'rank';
 }
-function renderPlayerTags(tags, extraClass = '') {
+function renderPlayerTags(tags, extraClass = '', tierBadge = null) {
   const validTags = Array.isArray(tags) ? tags.filter((tag) => String(tag || '').trim()) : [];
-  if (!validTags.length) return '';
-  return `<span class="player-tags ${extraClass}">${validTags.map((tag) => `<span class="player-tag ${tagStyle(tag)}">${escapeHtml(tag)}</span>`).join('')}</span>`;
+  if (!validTags.length && !tierBadge) return '';
+  const tier = tierBadge ? `<span class="player-tag tier-source" title="${escapeHtml(`${tierBadge.label} ${tierBadge.mode || ''}`.trim())}"><img src="${escapeHtml(tierBadge.logo)}" alt="${escapeHtml(tierBadge.label)} logo">${escapeHtml(tierBadge.tier)}</span>` : '';
+  return `<span class="player-tags ${extraClass}">${tier}${validTags.map((tag) => `<span class="player-tag ${tagStyle(tag)}">${escapeHtml(tag)}</span>`).join('')}</span>`;
 }
 function matchRegion(mode) {
   const value = String(mode || '');
@@ -85,7 +86,7 @@ function renderForm() {
 async function load() {
   const me = await api('/api/me');
   currentUser = me;
-  $('#username').textContent = me.username; $('#profile-name').textContent = me.username; $('#profile-tags').innerHTML = renderPlayerTags(me.tags);
+  $('#username').textContent = me.username; $('#profile-name').textContent = me.username; $('#profile-tags').innerHTML = renderPlayerTags(me.tags, '', me.tier_badge);
   $('#menu-username').textContent = me.username;
   $('#menu-discord-id').textContent = me.minecraft_username ? `Playing as ${me.minecraft_username}` : 'Minecraft not verified';
   $('#balance').textContent = Number(me.balance).toLocaleString(); $('#wallet-balance').textContent = Number(me.balance).toLocaleString(); $('#locked').textContent = Number(me.locked_balance).toLocaleString(); $('#snipes').textContent = Number(me.snipes || 0);
@@ -159,7 +160,7 @@ function renderPlayerSearch(players, query) {
   results.innerHTML = players.map((player) => {
     const identity = player.minecraft_username ? `Minecraft: ${escapeHtml(player.minecraft_username)}` : `Discord ID: ${escapeHtml(player.discord_id)}`;
     const avatar = player.avatar_url ? `<img src="${escapeHtml(player.avatar_url)}" alt="">` : 'DW';
-    return `<button class="search-result" data-player-statistics="${escapeHtml(player.discord_id)}"><span class="search-result-avatar">${avatar}</span><span><b>${escapeHtml(player.username)}</b>${renderPlayerTags(player.tags, 'search-tags')}<small>${identity}</small></span></button>`;
+    return `<button class="search-result" data-player-statistics="${escapeHtml(player.discord_id)}"><span class="search-result-avatar">${avatar}</span><span><b>${escapeHtml(player.username)}</b>${renderPlayerTags(player.tags, 'search-tags', player.tier_badge)}<small>${identity}</small></span></button>`;
   }).join('');
   results.hidden = false;
 }
@@ -178,7 +179,11 @@ $('#player-search-input').addEventListener('input', () => {
   clearTimeout(playerSearchTimer);
   playerSearchTimer = setTimeout(searchPlayers, 220);
 });
-$('#player-search-input').addEventListener('keydown', (event) => { if (event.key === 'Escape') { clearPlayerSearch(); event.currentTarget.blur(); } });
+$('#player-search-input').addEventListener('focus', searchPlayers);
+$('#player-search-input').addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') { clearPlayerSearch(); event.currentTarget.blur(); }
+  if (event.key === 'Enter') { event.preventDefault(); const first = $('#player-search-results [data-player-statistics]'); if (first) first.click(); else searchPlayers(); }
+});
 $('#player-search-results').addEventListener('click', (event) => {
   const result = event.target.closest('[data-player-statistics]');
   if (!result) return;
@@ -744,6 +749,7 @@ function renderStatistics(stats) {
   }
   const winWidth = total ? Math.round((wins / total) * 100) : 0;
   $('#statistics-content').innerHTML = `<section class="stat-player-card"><div class="stat-avatar">${stats.avatar_url ? `<img src="${escapeHtml(stats.avatar_url)}">` : 'DW'}</div><div><h3>${escapeHtml(stats.username)}</h3>${renderPlayerTags(stats.tags, 'stat-tags')}<p>Discord ID ${escapeHtml(stats.discord_id)}</p><div class="stat-badges"><span>✓ Discord</span>${stats.minecraft_username ? '<span>✓ Minecraft</span>' : ''}</div></div><div class="stat-streak">Current record<br><b>${wins}W · ${losses}L</b></div></section><div class="statistics-grid"><article><h3>♜ Performance <small>Joined ${memberSince(stats.member_since)}</small></h3><div class="performance-values"><span>Win Rate<b>${winRate}${winRate === '—' ? '' : '%'}</b></span><span>Total Matches<b>${total}</b></span></div><div class="win-loss"><b>${wins}W</b><span>W / L</span><em>${losses}L</em></div><div class="win-loss-bar"><i style="width:${winWidth}%"></i></div></article><article><h3>◉ Match Stats</h3><div class="performance-values"><span>Settled<b>${statNumber(stats.settled_matches)}</b></span><span>Active<b>${statNumber(stats.active_matches)}</b></span></div><p class="stat-copy">Only completed matches count toward a player’s official record.</p></article><article><h3>♛ Tournament</h3><div class="mini-stat"><span>Round wins</span><b>0</b></div><div class="mini-stat"><span>Earnings</span><b>0</b></div></article><article><h3>▣ Account Info</h3><p class="stat-copy">Member since <b>${memberSince(stats.member_since)}</b></p><p class="stat-copy">${stats.minecraft_username ? `Minecraft: ${escapeHtml(stats.minecraft_username)}` : 'Minecraft not verified'}</p></article></div>`;
+  if (stats.tier_badge) $('#statistics-content .stat-player-card h3').insertAdjacentHTML('afterend', renderPlayerTags([], 'stat-tags', stats.tier_badge));
 }
 async function openStatistics(endpoint = '/api/me/statistics', includeFinancial = true) {
   closeHeaderPopovers();

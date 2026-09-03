@@ -10,7 +10,7 @@
     if (location.protocol === 'file:') location.replace('http://localhost:3000/dashboard');
   </script>
   <link rel="stylesheet" href="/styles.css?v=20260902b">
-  <link rel="stylesheet" href="/match.css?v=20260902b">
+  <link rel="stylesheet" href="/match.css?v=20260903b">
   <style>
     .player-tags { align-items:center; display:flex; flex-wrap:wrap; gap:5px; margin:6px 0 9px; }
     .player-tag { border:1px solid #316c83; border-radius:999px; color:#a9ebff; background:#112a33; font-size:10px; font-weight:900; letter-spacing:.03em; line-height:1; padding:5px 7px; white-space:nowrap; }
@@ -111,13 +111,18 @@
         </section>
 
         <aside class="match-chat">
-          <div class="chat-title">Match Support</div>
-          <div id="support-message" class="chat-message">Share this match link with your opponent. Only the players in this match can open a staff ticket.</div>
+          <div class="chat-title"><span>Match Chat</span><small>Participants only</small></div>
+          <div id="support-message" class="chat-message">Share this match link with your opponent. Only match players can read and type here.</div>
+          <div id="chat-messages" class="chat-messages" aria-live="polite"><div class="chat-empty">No messages yet. Say hello to your opponent.</div></div>
+          <form id="chat-form" class="chat-composer">
+            <input id="chat-input" maxlength="500" autocomplete="off" placeholder="Message your opponent…" aria-label="Match chat message">
+            <button id="chat-send" type="submit" aria-label="Send message">Send</button>
+          </form>
         </aside>
       </main>
     </div>
   </div>
   <div id="toast" role="status"></div>
-  <script src="/match.js?v=20260902b"></script>
+  <script src="/match.js?v=20260903b"></script>
 </body>
 </html>

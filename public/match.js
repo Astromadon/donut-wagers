@@ -1,6 +1,10 @@
 const $ = (selector) => document.querySelector(selector);
 const matchCode = decodeURIComponent(location.pathname.split('/').pop());
 let toastTimer;
+let activeMatch = null;
+let chatPoll = null;
+let chatLoading = false;
+let chatSignature = '';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character]));
@@ -51,19 +55,59 @@ function tagStyle(tag) {
   if (normalized === 'staff') return 'staff';
   return 'rank';
 }
-function renderPlayerTags(tags) {
+function renderPlayerTags(tags, tierBadge = null) {
   const validTags = Array.isArray(tags) ? tags.filter((tag) => String(tag || '').trim()) : [];
-  if (!validTags.length) return '';
-  return `<div class="player-tags">${validTags.map((tag) => `<span class="player-tag ${tagStyle(tag)}">${escapeHtml(tag)}</span>`).join('')}</div>`;
+  if (!validTags.length && !tierBadge) return '';
+  const tier = tierBadge ? `<span class="player-tag tier-source" title="${escapeHtml(`${tierBadge.label} ${tierBadge.mode || ''}`.trim())}"><img src="${escapeHtml(tierBadge.logo)}" alt="${escapeHtml(tierBadge.label)} logo">${escapeHtml(tierBadge.tier)}</span>` : '';
+  return `<div class="player-tags">${tier}${validTags.map((tag) => `<span class="player-tag ${tagStyle(tag)}">${escapeHtml(tag)}</span>`).join('')}</div>`;
 }
-function playerCard(label, username, minecraftName, tags, waiting) {
+function playerCard(label, username, minecraftName, tags, tierBadge, waiting) {
   const safeMinecraft = minecraftName ? escapeHtml(minecraftName) : '';
   return `<article class="player-card${waiting ? ' waiting' : ''}">
     <p class="team">${label}</p>
     <h3>${escapeHtml(username || 'Waiting for opponent')}</h3>
-    ${renderPlayerTags(tags)}
+    ${renderPlayerTags(tags, tierBadge)}
     ${minecraftName ? `<div class="playing-as">Playing as <b>${safeMinecraft}</b><button class="minecraft-copy" data-copy-minecraft="${safeMinecraft}" aria-label="Copy ${safeMinecraft}'s Minecraft username">⧉</button></div>` : '<div class="playing-as">Minecraft account pending</div>'}
   </article>`;
+}
+function renderChat(messages) {
+  const list = $('#chat-messages');
+  const signature = messages.map((message) => message.id).join('|');
+  if (signature === chatSignature) return;
+  chatSignature = signature;
+  if (!messages.length) {
+    list.innerHTML = '<div class="chat-empty">No messages yet. Say hello to your opponent.</div>';
+    return;
+  }
+  list.innerHTML = messages.map((message) => {
+    const avatar = message.avatar_url ? `<img src="${escapeHtml(message.avatar_url)}" alt="">` : 'DW';
+    const created = new Date(message.created_at);
+    const time = Number.isNaN(created.getTime()) ? '' : created.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return `<article class="chat-row"><span class="chat-avatar">${avatar}</span><div class="chat-bubble"><div class="chat-meta"><b>${escapeHtml(message.username)}</b><time>${escapeHtml(time)}</time></div><p>${escapeHtml(message.body)}</p></div></article>`;
+  }).join('');
+  list.scrollTop = list.scrollHeight;
+}
+async function loadChat() {
+  if (chatLoading || !activeMatch) return;
+  chatLoading = true;
+  try {
+    const result = await api(`/api/matches/${encodeURIComponent(activeMatch.match_code)}/chat`);
+    renderChat(result.messages || []);
+    $('#chat-input').disabled = !result.can_send;
+    $('#chat-send').disabled = !result.can_send;
+    $('#chat-input').placeholder = result.can_send ? 'Message your opponent…' : 'Chat is read-only';
+  } catch (error) {
+    $('#chat-messages').innerHTML = `<div class="chat-empty">${escapeHtml(error.message)}</div>`;
+    $('#chat-input').disabled = true;
+    $('#chat-send').disabled = true;
+  } finally { chatLoading = false; }
+}
+function configureChat(match, viewer) {
+  activeMatch = match;
+  clearInterval(chatPoll);
+  chatSignature = '';
+  loadChat();
+  chatPoll = setInterval(loadChat, 3000);
 }
 function activateTimeline(match) {
   const ready = Boolean(match.opponent);
@@ -74,6 +118,7 @@ function activateTimeline(match) {
   $('#complete-step').classList.toggle('active', complete);
 }
 function render(match, viewer) {
+  configureChat(match, viewer);
   $('#top-balance').textContent = Number(viewer?.balance || 0).toLocaleString();
   $('#top-snipes').textContent = Number(viewer?.snipes || 0).toLocaleString();
   document.title = `${game(match)} · DonutWagers`;
@@ -87,7 +132,7 @@ function render(match, viewer) {
   $('#fact-prize').textContent = match.tournament_id ? Number(match.tournament_prize || 0).toLocaleString() : (Number(match.wager_amount || 0) * 1.8).toLocaleString();
   $('#rule-mode').textContent = game(match);
   $('#match-rules').textContent = match.rules || 'First to 5, win by two.';
-  $('#players').innerHTML = `${playerCard('CREATING TEAM', match.creator, match.creator_minecraft_username, match.creator_tags, false)}<div class="player-vs">VS</div>${playerCard('JOINING TEAM', match.opponent, match.opponent_minecraft_username, match.opponent_tags, !match.opponent)}`;
+  $('#players').innerHTML = `${playerCard('CREATING TEAM', match.creator, match.creator_minecraft_username, match.creator_tags, match.creator_tier_badge, false)}<div class="player-vs">VS</div>${playerCard('JOINING TEAM', match.opponent, match.opponent_minecraft_username, match.opponent_tags, match.opponent_tier_badge, !match.opponent)}`;
   const opponentMinecraft = viewer?.id === match.creator_id
     ? match.opponent_minecraft_username
     : viewer?.id === match.opponent_id
@@ -152,6 +197,23 @@ function render(match, viewer) {
     }
   };
 }
+
+$('#chat-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const input = $('#chat-input');
+  const body = input.value.trim();
+  if (!body || !activeMatch) return;
+  const button = $('#chat-send');
+  button.disabled = true;
+  try {
+    await api(`/api/matches/${encodeURIComponent(activeMatch.match_code)}/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: body }) });
+    input.value = '';
+    chatSignature = '';
+    await loadChat();
+    input.focus();
+  } catch (error) { showToast(error.message); }
+  finally { if (!['COMPLETED', 'CANCELLED'].includes(activeMatch.status)) button.disabled = false; }
+});
 
 async function reportResult(match, winnerId) {
   const buttons = [$('#report-creator-win'), $('#report-opponent-win')];
