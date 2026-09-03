@@ -118,6 +118,7 @@ function activateTimeline(match) {
   $('#complete-step').classList.toggle('active', complete);
 }
 function render(match, viewer) {
+  $('#match-content').classList.remove('match-action-pending', 'match-action-success');
   configureChat(match, viewer);
   $('#top-balance').textContent = Number(viewer?.balance || 0).toLocaleString();
   $('#top-snipes').textContent = Number(viewer?.snipes || 0).toLocaleString();
@@ -230,21 +231,24 @@ async function reportResult(match, winnerId) {
 }
 
 async function cancelMatch(match, needsOtherPlayer) {
-  const message = needsOtherPlayer
-    ? 'Request cancellation? Both players must confirm before the locked wagers are returned.'
-    : 'Cancel this open match and return your locked wager to available balance?';
-  if (!window.confirm(message)) return;
   const button = $('#cancel-match');
   button.disabled = true;
+  button.textContent = needsOtherPlayer ? 'Requesting…' : 'Cancelling…';
+  $('#match-content').classList.add('match-action-pending');
   try {
     const result = await api(`/api/matches/${encodeURIComponent(match.match_code)}/cancel`, { method: 'POST' });
     const notice = result.outcome === 'cancelled'
       ? 'Match cancelled. Locked balance has been released.'
       : 'Cancellation requested. Waiting for the other player to confirm.';
     showToast(notice);
+    $('#match-content').classList.remove('match-action-pending');
+    $('#match-content').classList.add('match-action-success');
+    await new Promise((resolve) => setTimeout(resolve, 320));
     await loadMatch();
   } catch (error) {
+    $('#match-content').classList.remove('match-action-pending');
     button.disabled = false;
+    button.textContent = needsOtherPlayer ? 'Request Cancellation' : 'Cancel Match';
     showToast(error.message);
   }
 }

@@ -48,7 +48,7 @@ function loadEnvFile() {
 }
 
 function emptyDb() {
-  return { users: [], sessions: [], matches: [], tournaments: [], announcements: [], minecraft_accounts: [], verification_codes: [], wagers: [], deposits: [], withdrawals: [], audit_logs: [], support_tickets: [], bans: [], bot_status: { last_heartbeat_at: null, bot_username: donutSmpService.botUsername } };
+  return { users: [], sessions: [], matches: [], tournaments: [], announcements: [], settings: { announcements_enabled: true }, minecraft_accounts: [], verification_codes: [], wagers: [], deposits: [], withdrawals: [], audit_logs: [], support_tickets: [], bans: [], bot_status: { last_heartbeat_at: null, bot_username: donutSmpService.botUsername } };
 }
 function normalizeDb(db) {
   db ??= emptyDb();
@@ -57,6 +57,8 @@ function normalizeDb(db) {
   db.matches ??= [];
   db.tournaments ??= [];
   db.announcements ??= [];
+  db.settings ??= {};
+  db.settings.announcements_enabled ??= true;
   db.minecraft_accounts ??= [];
   db.verification_codes ??= [];
   db.wagers ??= [];
@@ -661,8 +663,9 @@ const server = http.createServer(async (request, response) => {
       const user = await currentUser(request);
       if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
       const db = await readDb();
-      const announcements = [...db.announcements].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 20);
-      return sendJson(response, 200, { announcements });
+      const enabled = db.settings.announcements_enabled !== false;
+      const stored = [...db.announcements].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 20);
+      return sendJson(response, 200, { announcements: enabled ? stored : [], enabled, admin_announcements: isAdmin(user) ? stored : undefined });
     }
     if (request.method === 'POST' && url.pathname === '/api/bot/heartbeat') {
       if (!BOT_WEBHOOK_SECRET) return sendJson(response, 503, { error: 'Bot verification is not configured.' });
@@ -753,6 +756,19 @@ const server = http.createServer(async (request, response) => {
       audit(db, user.id, 'announcement_published', { announcement_id: announcement.id, published_to_discord: Boolean(discordMessage) });
       await writeDb(db);
       return sendJson(response, 201, { announcement });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/admin/announcements/visibility') {
+      const user = await currentUser(request);
+      if (!requireAdmin(response, user)) return;
+      const { enabled } = await readJson(request);
+      if (typeof enabled !== 'boolean') return sendJson(response, 400, { error: 'Announcement visibility must be true or false.' });
+      await withEscrowMutation(async () => {
+        const db = await readDb();
+        db.settings.announcements_enabled = enabled;
+        audit(db, user.id, 'announcement_visibility_changed', { enabled });
+        await writeDb(db);
+      });
+      return sendJson(response, 200, { enabled });
     }
     if (request.method === 'POST' && /^\/api\/admin\/tournaments\/[^/]+\/start$/.test(url.pathname)) {
       const user = await currentUser(request);

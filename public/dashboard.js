@@ -198,7 +198,21 @@ document.addEventListener('click', async e => {
     try { await copyMinecraftUsername(copy.dataset.copyMinecraft); toast(`Copied ${copy.dataset.copyMinecraft}.`); } catch { toast('Could not copy the Minecraft username.'); }
     return;
   }
-  const b=e.target.closest('[data-join]'); if(!b)return; try{await api(`/api/matches/${b.dataset.join}/join`,{method:'POST'});toast('Match joined.');load();}catch(x){toast(x.message);}
+  const b=e.target.closest('[data-join]');
+  if(!b)return;
+  const card=b.closest('.reference-match-card');
+  const original=b.textContent;
+  b.disabled=true;
+  b.textContent='JOINING…';
+  card?.classList.add('match-action-pending');
+  try{
+    const match=await api(`/api/matches/${b.dataset.join}/join`,{method:'POST'});
+    card?.classList.remove('match-action-pending');
+    card?.classList.add('match-action-success');
+    b.textContent='MATCH JOINED ✓';
+    toast('Match joined. Opening room…');
+    setTimeout(()=>{location.href=match.match_url||`/matches/${match.match_code||match.id}`;},420);
+  }catch(x){card?.classList.remove('match-action-pending');b.disabled=false;b.textContent=original;toast(x.message);}
 });
 let verificationPoll = null;
 function stopVerificationPoll() { if (verificationPoll) clearInterval(verificationPoll); verificationPoll = null; }
@@ -459,7 +473,7 @@ function renderAnnouncements(announcements) {
 function ensureAnnouncementAdmin() {
   const grid = document.querySelector('#admin .admin-control-grid');
   if (!grid || $('#announcement-form')) return;
-  grid.insertAdjacentHTML('beforeend', `<form id="announcement-form" class="admin-control-card announcement-admin-card"><small>COMMUNITY CONTROL</small><h2>Post an announcement</h2><label class="label" for="announcement-title">TITLE</label><input id="announcement-title" class="amount" maxlength="100" placeholder="Tournament starting soon" required><label class="label" for="announcement-message">MESSAGE</label><textarea id="announcement-message" class="amount" maxlength="2000" placeholder="Write the announcement players will see..." required></textarea><label class="discord-publish-option"><input id="announcement-discord" type="checkbox" checked><span><b>Post through Discord bot</b><small>Also sends this to your configured announcements channel.</small></span></label><button type="submit" class="orange">Publish announcement</button></form>`);
+  grid.insertAdjacentHTML('beforeend', `<form id="announcement-form" class="admin-control-card announcement-admin-card"><small>COMMUNITY CONTROL</small><h2>Post an announcement</h2><label class="announcement-visibility-option"><span><b>Show announcements on site</b><small>Turn this off to hide every site announcement without deleting them.</small></span><input id="announcement-site-enabled" type="checkbox" checked><i></i></label><label class="label" for="announcement-title">TITLE</label><input id="announcement-title" class="amount" maxlength="100" placeholder="Tournament starting soon" required><label class="label" for="announcement-message">MESSAGE</label><textarea id="announcement-message" class="amount" maxlength="2000" placeholder="Write the announcement players will see..." required></textarea><label class="discord-publish-option"><input id="announcement-discord" type="checkbox" checked><span><b>Post through Discord bot</b><small>Also sends this to your configured announcements channel.</small></span></label><button type="submit" class="orange">Publish announcement</button></form>`);
 }
 function ensureSnipeAdmin() {
   const grid = document.querySelector('#admin .admin-control-grid');
@@ -525,10 +539,22 @@ async function loadAdmin() {
   if (balanceButton && !balanceForm.querySelector('[data-balance-direction]')) balanceButton.outerHTML = '<div class="admin-form-actions balance-actions"><button type="submit" data-balance-direction="add" class="orange">＋ Add cash</button><button type="submit" data-balance-direction="remove" class="danger-action">− Remove cash</button></div>';
   $('#admin-match-list').innerHTML = '<div class="empty"><h2>Loading admin matches…</h2></div>';
   loadTournaments(true);
+  api('/api/announcements').then((result) => { if ($('#announcement-site-enabled')) $('#announcement-site-enabled').checked = result.enabled !== false; }).catch(() => undefined);
   try { renderAdminMatches((await api('/api/admin/matches')).matches); }
   catch (error) { $('#admin-match-list').innerHTML = `<div class="empty"><h2>Unable to load admin matches.</h2><p>${escapeHtml(error.message)}</p></div>`; }
 }
 $('#admin-refresh').onclick = loadAdmin;
+$('#admin').addEventListener('change', async (event) => {
+  if (event.target.id !== 'announcement-site-enabled') return;
+  const toggle = event.target;
+  toggle.disabled = true;
+  try {
+    const result = await api('/api/admin/announcements/visibility', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: toggle.checked }) });
+    toast(result.enabled ? 'Announcements are now visible.' : 'Announcements are now hidden from the site.');
+    renderAnnouncements((await api('/api/announcements')).announcements);
+  } catch (error) { toggle.checked = !toggle.checked; toast(error.message); }
+  finally { toggle.disabled = false; }
+});
 $('#admin').addEventListener('submit', async (event) => {
   if (event.target.id !== 'announcement-form') return;
   event.preventDefault();

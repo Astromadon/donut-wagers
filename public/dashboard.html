@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>DonutWagers</title>
   <link rel="stylesheet" href="/styles.css?v=20260902b">
-  <link rel="stylesheet" href="/dashboard.css?v=20260903a">
+  <link rel="stylesheet" href="/dashboard.css?v=20260903d">
   <style>
     .profile-title { align-items:center; display:flex; flex-wrap:wrap; gap:9px; }
     .player-tags { align-items:center; display:flex; flex-wrap:wrap; gap:5px; margin:4px 0; }
@@ -113,6 +113,6 @@
   <dialog id="ban-dialog"><div class="modal ban-modal"><button class="x" data-close>×</button><h2 id="ban-dialog-title">Ban Player</h2><p id="ban-dialog-player"></p><label class="label" for="ban-reason">BAN REASON</label><textarea id="ban-reason" class="amount" maxlength="300" placeholder="Explain why this action is being taken"></textarea><label class="label" for="ban-duration">DURATION IN HOURS <small>Blank = permanent · maximum 8760</small></label><input id="ban-duration" class="amount" type="number" min="1" max="8760" placeholder="Permanent"><footer><button data-close>Cancel</button><button id="confirm-ban" class="orange">Ban Player</button></footer></div></dialog>
   <dialog id="tags-dialog"><div class="modal tags-modal"><button class="x" data-close>×</button><h2 id="tags-dialog-title">Edit Player Tags</h2><p id="tags-dialog-player"></p><label class="label" for="player-tags-input">PLAYER TAGS <small>Up to 3 · comma-separated</small></label><input id="player-tags-input" class="amount" maxlength="100" autocomplete="off" placeholder="Example: Staff, LT4 Crystal"><p class="tag-help">These badges are visible on profiles, match listings, and match rooms. The Owner badge is automatic and cannot be assigned.</p><footer><button data-close>Cancel</button><button id="save-player-tags" class="orange">Save Tags</button></footer></div></dialog>
   <div id="toast"></div>
-  <script src="/dashboard.js?v=20260903a"></script>
+  <script src="/dashboard.js?v=20260903d"></script>
 </body>
 </html>
