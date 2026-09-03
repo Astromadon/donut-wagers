@@ -459,6 +459,11 @@ document.addEventListener('pointerdown', (event) => {
 document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeHeaderPopovers(); });
 document.querySelectorAll('[data-menu-view]').forEach((button) => button.onclick = () => { showView(button.dataset.menuView); closeHeaderPopovers(); });
 document.querySelectorAll('[data-social]').forEach((button) => button.onclick = () => {
+  if (button.dataset.social === 'discord') {
+    window.open('https://discord.gg/6tK8TRgb23', '_blank', 'noopener,noreferrer');
+    closeHeaderPopovers();
+    return;
+  }
   const label = { discord: 'Discord community', youtube: 'YouTube', x: 'X', favorites: 'Favorites', teams: 'Teams' }[button.dataset.social] || 'This feature';
   toast(`${label} is not configured yet.`);
   closeHeaderPopovers();
