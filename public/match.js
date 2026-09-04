@@ -5,6 +5,7 @@ let activeMatch = null;
 let chatPoll = null;
 let chatLoading = false;
 let chatSignature = '';
+let readyPoll = null;
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character]));
@@ -45,6 +46,7 @@ function game(match) {
 function statusLabel(match) {
   if (match.status === 'PLAYER_1_DEPOSIT_PENDING' || match.status === 'OPEN') return 'Waiting for opponent';
   if (match.status === 'DEPOSIT_PENDING') return 'Both players joining';
+  if (match.status === 'READY_UP') return `Ready up · ${Number(match.ready_count || 0)}/2`;
   if (match.status === 'IN_PROGRESS') return 'Match in progress';
   if (match.status === 'COMPLETED') return 'Match complete';
   return String(match.status || 'Match open').replaceAll('_', ' ').toLowerCase();
@@ -52,7 +54,7 @@ function statusLabel(match) {
 function tagStyle(tag) {
   const normalized = String(tag || '').trim().toLowerCase();
   if (normalized === 'owner') return 'owner';
-  if (normalized === 'staff') return 'staff';
+  if (['staff', 'admin', 'helper'].includes(normalized)) return 'staff';
   return 'rank';
 }
 function renderPlayerTags(tags, tierBadge = null) {
@@ -62,12 +64,13 @@ function renderPlayerTags(tags, tierBadge = null) {
   return `<div class="player-tags">${tier}${validTags.map((tag) => `<span class="player-tag ${tagStyle(tag)}">${escapeHtml(tag)}</span>`).join('')}</div>`;
 }
 function playerCard(label, username, minecraftName, tags, tierBadge, waiting) {
+  const hiddenIdentity = username === 'Hidden until ready';
   const safeMinecraft = minecraftName ? escapeHtml(minecraftName) : '';
-  return `<article class="player-card${waiting ? ' waiting' : ''}">
+  return `<article class="player-card${waiting ? ' waiting' : ''}${hiddenIdentity ? ' identity-hidden' : ''}">
     <p class="team">${label}</p>
-    <h3>${escapeHtml(username || 'Waiting for opponent')}</h3>
+    <h3>${hiddenIdentity ? '◉ Hidden until ready' : escapeHtml(username || 'Waiting for opponent')}</h3>
     ${renderPlayerTags(tags, tierBadge)}
-    ${minecraftName ? `<div class="playing-as">Playing as <b>${safeMinecraft}</b><button class="minecraft-copy" data-copy-minecraft="${safeMinecraft}" aria-label="Copy ${safeMinecraft}'s Minecraft username">⧉</button></div>` : '<div class="playing-as">Minecraft account pending</div>'}
+    ${hiddenIdentity ? '<div class="playing-as">Identity unlocks when both players ready up</div>' : minecraftName ? `<div class="playing-as">Playing as <b>${safeMinecraft}</b><button class="minecraft-copy" data-copy-minecraft="${safeMinecraft}" aria-label="Copy ${safeMinecraft}'s Minecraft username">⧉</button></div>` : '<div class="playing-as">Minecraft account pending</div>'}
   </article>`;
 }
 function renderChat(messages) {
@@ -150,6 +153,20 @@ function render(match, viewer) {
     try { await copyText(duelCommand); showToast(`Copied ${duelCommand}`); } catch { showToast('Could not copy the duel command.'); }
   };
   activateTimeline(match);
+  clearInterval(readyPoll);
+  if (match.status === 'READY_UP') readyPoll = setInterval(loadMatch, 3000);
+  const readyButton = $('#ready-match');
+  const canReady = Boolean(viewer && match.status === 'READY_UP' && !match.viewer_ready);
+  readyButton.hidden = !canReady;
+  readyButton.onclick = async () => {
+    readyButton.disabled = true;
+    readyButton.textContent = 'Readying…';
+    try {
+      const updated = await api(`/api/matches/${encodeURIComponent(match.match_code)}/ready`, { method: 'POST' });
+      showToast(updated.status === 'IN_PROGRESS' ? 'Both players are ready. Identities unlocked.' : 'You are ready. Waiting for your opponent.');
+      await loadMatch();
+    } catch (error) { readyButton.disabled = false; readyButton.textContent = '✓ Ready Up'; showToast(error.message); }
+  };
   $('#copy-match-link').onclick = async () => {
     try { await copyText(match.match_url); showToast('Match link copied.'); } catch { showToast('Could not copy the match link.'); }
   };
@@ -167,7 +184,7 @@ function render(match, viewer) {
   const cancelButton = $('#cancel-match');
   const isParticipant = Boolean(viewer && [match.creator_id, match.opponent_id].includes(viewer.id));
   const isOpenCreator = isParticipant && viewer.id === match.creator_id && ['OPEN', 'PLAYER_1_DEPOSIT_PENDING'].includes(match.status);
-  const canVoteToCancel = isParticipant && !match.tournament_id && ['IN_PROGRESS', 'DISPUTED'].includes(match.status);
+  const canVoteToCancel = isParticipant && !match.tournament_id && ['READY_UP', 'IN_PROGRESS', 'DISPUTED'].includes(match.status);
   cancelButton.hidden = !isOpenCreator && !canVoteToCancel;
   if (isOpenCreator) {
     cancelButton.textContent = 'Cancel Match';

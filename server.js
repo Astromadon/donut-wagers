@@ -189,6 +189,33 @@ function publicLobbyMatch(match, users, viewer) {
   visible.snipe_profile = viewer.id === match.creator_id ? null : { username: creator?.discord_username || 'Unknown', wins: Number(creator?.wins || 0), losses: Number(creator?.losses || 0) };
   return visible;
 }
+function publicMatchForViewer(match, users, viewer) {
+  const visible = publicMatch(match, users);
+  const readyIds = Array.isArray(match.ready_user_ids) ? match.ready_user_ids : [];
+  const identitiesRevealed = ['IN_PROGRESS', 'DISPUTED', 'COMPLETED', 'CANCELLED'].includes(match.status) ||
+    (match.creator_id && match.opponent_id && [match.creator_id, match.opponent_id].every((id) => readyIds.includes(id)));
+  visible.ready_count = readyIds.filter((id) => [match.creator_id, match.opponent_id].includes(id)).length;
+  visible.viewer_ready = Boolean(viewer && readyIds.includes(viewer.id));
+  visible.identities_revealed = identitiesRevealed;
+  if (identitiesRevealed || isStaff(viewer)) return visible;
+  const isParticipant = Boolean(viewer && [match.creator_id, match.opponent_id].includes(viewer.id));
+  if (!isParticipant) {
+    visible.creator_id = null; visible.creator = 'Hidden until ready'; visible.creator_tags = [];
+    visible.creator_tier_badge = null; visible.creator_minecraft_username = null;
+    visible.opponent_id = null; visible.opponent = 'Hidden until ready'; visible.opponent_tags = [];
+    visible.opponent_tier_badge = null; visible.opponent_minecraft_username = null;
+    return visible;
+  }
+  if (viewer.id !== match.creator_id) {
+    visible.creator_id = null; visible.creator = 'Hidden until ready'; visible.creator_tags = [];
+    visible.creator_tier_badge = null; visible.creator_minecraft_username = null;
+  }
+  if (viewer.id !== match.opponent_id) {
+    visible.opponent_id = null; visible.opponent = 'Hidden until ready'; visible.opponent_tags = [];
+    visible.opponent_tier_badge = null; visible.opponent_minecraft_username = null;
+  }
+  return visible;
+}
 function publicChatMessage(message, users) {
   const sender = users.find((candidate) => candidate.id === message.user_id);
   return { id: message.id, user_id: message.user_id, username: sender?.discord_username || 'Unknown', avatar_url: avatarUrl(sender), body: String(message.body || ''), created_at: message.created_at };
@@ -338,7 +365,16 @@ function publicWithdrawal(withdrawal) {
   return { id: withdrawal.id, status: withdrawal.status, amount: withdrawal.amount, minecraft_username: withdrawal.minecraft_username, created_at: withdrawal.created_at, completed_at: withdrawal.completed_at || null, error: withdrawal.error || null };
 }
 function avatarUrl(user) { return user?.discord_avatar ? `https://cdn.discordapp.com/avatars/${user.discord_id}/${user.discord_avatar}.png?size=128` : null; }
-function isAdmin(user) { return Boolean(Array.isArray(user?.player_tags) && user.player_tags.some((tag) => String(tag).trim().toLowerCase() === 'owner')); }
+function staffRole(user) {
+  const tags = new Set((Array.isArray(user?.player_tags) ? user.player_tags : []).map((tag) => String(tag).trim().toLowerCase()));
+  if (tags.has('owner')) return 'owner';
+  if (tags.has('admin')) return 'admin';
+  if (tags.has('helper')) return 'helper';
+  return 'player';
+}
+function isOwner(user) { return staffRole(user) === 'owner'; }
+function isAdmin(user) { return ['owner', 'admin'].includes(staffRole(user)); }
+function isStaff(user) { return ['owner', 'admin', 'helper'].includes(staffRole(user)); }
 const MAX_PLAYER_TAGS = 3;
 function normalizePlayerTags(rawTags) {
   if (!Array.isArray(rawTags)) throw new Error('Tags must be provided as a list.');
@@ -357,7 +393,7 @@ function normalizePlayerTags(rawTags) {
   return tags;
 }
 function playerTags(user) {
-  if (isAdmin(user)) {
+  if (isOwner(user)) {
     const additionalTags = (user.player_tags || []).filter((tag) => String(tag).trim().toLowerCase() !== 'owner');
     try { return ['Owner', ...normalizePlayerTags(additionalTags).slice(0, MAX_PLAYER_TAGS - 1)]; }
     catch { return ['Owner']; }
@@ -373,6 +409,11 @@ function playerTierBadge(user) {
 function requireAdmin(response, user) {
   if (!user) { sendJson(response, 401, { error: 'Authentication required.' }); return false; }
   if (!isAdmin(user)) { sendJson(response, 403, { error: 'Administrator access is required.' }); return false; }
+  return true;
+}
+function requireStaff(response, user) {
+  if (!user) { sendJson(response, 401, { error: 'Authentication required.' }); return false; }
+  if (!isStaff(user)) { sendJson(response, 403, { error: 'Staff access is required.' }); return false; }
   return true;
 }
 function playerOverview(db, user) {
@@ -391,6 +432,18 @@ function playerOverview(db, user) {
     settled_matches: matches.filter((match) => match.status === 'COMPLETED').length,
     active_matches: matches.filter((match) => !['COMPLETED', 'CANCELLED'].includes(match.status)).length,
   };
+}
+function searchRegisteredPlayers(db, rawQuery, limit = 12) {
+  const query = String(rawQuery || '').trim().toLowerCase();
+  const searchValues = (candidate) => [candidate.discord_id, candidate.discord_username, candidate.minecraft_username]
+    .map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+  return db.users
+    .filter((candidate) => searchValues(candidate).some((value) => value.includes(query)))
+    .sort((left, right) => {
+      const rank = (candidate) => searchValues(candidate).some((value) => value === query) ? 0 : searchValues(candidate).some((value) => value.startsWith(query)) ? 1 : 2;
+      return rank(left) - rank(right) || String(left.discord_username || '').localeCompare(String(right.discord_username || ''));
+    })
+    .slice(0, limit);
 }
 function money(value) { return Math.max(0, Math.trunc(Number(value) || 0)); }
 function payoutForMatch(match) {
@@ -579,15 +632,7 @@ const server = http.createServer(async (request, response) => {
       if (query.length < 2) return sendJson(response, 200, { players: [] });
       if (query.length > 64) return sendJson(response, 400, { error: 'Search queries must be 64 characters or fewer.' });
       const db = await readDb();
-      const searchValues = (candidate) => [candidate.discord_id, candidate.discord_username, candidate.minecraft_verified ? candidate.minecraft_username : ''].map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
-      const players = db.users
-        .filter((candidate) => searchValues(candidate).some((value) => value.includes(query)))
-        .sort((left, right) => {
-          const rank = (candidate) => searchValues(candidate).some((value) => value === query) ? 0 : searchValues(candidate).some((value) => value.startsWith(query)) ? 1 : 2;
-          return rank(left) - rank(right) || String(left.discord_username || '').localeCompare(String(right.discord_username || ''));
-        })
-        .slice(0, 12)
-        .map((candidate) => playerOverview(db, candidate));
+      const players = searchRegisteredPlayers(db, query).map((candidate) => playerOverview(db, candidate));
       return sendJson(response, 200, { players });
     }
     if (request.method === 'GET' && /^\/api\/players\/[^/]+\/statistics$/.test(url.pathname)) {
@@ -602,7 +647,7 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'GET' && url.pathname === '/api/me') {
       const user = await currentUser(request);
       if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
-      return sendJson(response, 200, { id: user.id, username: user.discord_username, discord_id: user.discord_id, avatar_url: avatarUrl(user), tags: playerTags(user), tier_badge: playerTierBadge(user), balance: availableBalance(user), total_balance: money(user.balance), locked_balance: money(user.locked_balance), snipes: Number(user.snipes || 0), wins: user.wins, losses: user.losses, minecraft_account: user.minecraft_username, minecraft_uuid: user.minecraft_uuid, minecraft_username: user.minecraft_username, minecraft_verified: user.minecraft_verified, minecraft_verified_at: user.minecraft_verified_at, is_admin: isAdmin(user), donut_smp_status: donutSmpService.status() });
+      return sendJson(response, 200, { id: user.id, username: user.discord_username, discord_id: user.discord_id, avatar_url: avatarUrl(user), tags: playerTags(user), tier_badge: playerTierBadge(user), balance: availableBalance(user), total_balance: money(user.balance), locked_balance: money(user.locked_balance), snipes: Number(user.snipes || 0), wins: user.wins, losses: user.losses, minecraft_account: user.minecraft_username, minecraft_uuid: user.minecraft_uuid, minecraft_username: user.minecraft_username, minecraft_verified: user.minecraft_verified, minecraft_verified_at: user.minecraft_verified_at, access_role: staffRole(user), is_owner: isOwner(user), is_admin: isAdmin(user), is_helper: staffRole(user) === 'helper', donut_smp_status: donutSmpService.status() });
     }
     if (request.method === 'GET' && url.pathname === '/api/me/statistics') {
       const user = await currentUser(request);
@@ -690,7 +735,7 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === 'GET' && url.pathname === '/api/admin/matches') {
       const user = await currentUser(request);
-      if (!requireAdmin(response, user)) return;
+      if (!requireStaff(response, user)) return;
       const db = await readDb();
       const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit') || 50)));
       const matches = [...db.matches].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, limit).map((match) => adminMatch(match, db.users));
@@ -884,7 +929,7 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === 'POST' && /^\/api\/admin\/matches\/[^/]+\/resolve$/.test(url.pathname)) {
       const user = await currentUser(request);
-      if (!requireAdmin(response, user)) return;
+      if (!requireStaff(response, user)) return;
       const { winner_id, winnerId: requestedWinnerId } = await readJson(request);
       const winnerId = String(winner_id || requestedWinnerId || '');
       const db = await readDb();
@@ -892,6 +937,7 @@ const server = http.createServer(async (request, response) => {
       const match = findMatch(db, code);
       if (!match) return sendJson(response, 404, { error: 'Match not found.' });
       if (!match.opponent_id) return sendJson(response, 409, { error: 'Both participants are required before setting a winner.' });
+      if (staffRole(user) === 'helper' && !['IN_PROGRESS', 'DISPUTED'].includes(match.status)) return sendJson(response, 403, { error: 'Helpers can only resolve active or disputed matches.' });
       if (match.tournament_id && match.status === 'COMPLETED' && match.winner_id !== winnerId) return sendJson(response, 409, { error: 'A completed bracket result cannot be overturned after advancement. Resolve tournament disputes before confirming the round.' });
       try {
         const result = settleMatch(db, match, winnerId, user.id, 'admin_override');
@@ -911,7 +957,7 @@ const server = http.createServer(async (request, response) => {
       const players = db.users
         .filter((candidate) => [candidate.discord_id, candidate.discord_username, candidate.minecraft_verified ? candidate.minecraft_username : ''].some((value) => String(value || '').toLowerCase().includes(query)))
         .slice(0, 20)
-        .map((candidate) => ({ ...playerOverview(db, candidate), is_admin: isAdmin(candidate), ban: activeBan(db, candidate.id) }));
+        .map((candidate) => ({ ...playerOverview(db, candidate), access_role: staffRole(candidate), is_owner: isOwner(candidate), is_admin: isAdmin(candidate), ban: activeBan(db, candidate.id) }));
       return sendJson(response, 200, { players });
     }
     if (request.method === 'POST' && /^\/api\/admin\/players\/[^/]+\/tags$/.test(url.pathname)) {
@@ -922,10 +968,12 @@ const server = http.createServer(async (request, response) => {
       const db = await readDb();
       const player = db.users.find((candidate) => candidate.discord_id === discordId);
       if (!player) return sendJson(response, 404, { error: 'Player not found.' });
-      if (isAdmin(player)) return sendJson(response, 403, { error: 'The Owner tag is automatic and cannot be edited.' });
+      if (isOwner(player)) return sendJson(response, 403, { error: 'The Owner tag is automatic and cannot be edited.' });
+      if (isAdmin(player) && !isOwner(user)) return sendJson(response, 403, { error: 'Only the Owner can edit an Admin account.' });
       let cleanedTags;
       try { cleanedTags = normalizePlayerTags(tags); }
       catch (error) { return sendJson(response, 400, { error: error.message || 'Invalid player tags.' }); }
+      if (!isOwner(user) && cleanedTags.some((tag) => ['admin', 'helper'].includes(String(tag).toLowerCase()))) return sendJson(response, 403, { error: 'Only the Owner can assign Admin or Helper roles.' });
       player.player_tags = cleanedTags;
       audit(db, user.id, 'player_tags_updated', { target_user_id: player.id, tags: cleanedTags });
       await writeDb(db);
@@ -1299,7 +1347,7 @@ const server = http.createServer(async (request, response) => {
         .filter((match) => match.creator_id === user.id || match.opponent_id === user.id)
         .sort((a, b) => new Date(b.settled_at || b.cancelled_at || b.created_at) - new Date(a.settled_at || a.cancelled_at || a.created_at))
         .slice(0, 8)
-        .map((match) => publicMatch(match, db.users));
+        .map((match) => publicMatchForViewer(match, db.users, user));
       return sendJson(response, 200, matches);
     }
     if (request.method === 'GET' && /^\/api\/matches\/[^/]+$/.test(url.pathname)) {
@@ -1309,7 +1357,28 @@ const server = http.createServer(async (request, response) => {
       const match = findMatch(db, decodeURIComponent(url.pathname.split('/')[3]));
       if (!match) return sendJson(response, 404, { error: 'Match not found.' });
       const open = ['OPEN', 'PLAYER_1_DEPOSIT_PENDING'].includes(match.status);
-      return sendJson(response, 200, open ? publicLobbyMatch(match, db.users, user) : publicMatch(match, db.users));
+      return sendJson(response, 200, open ? publicLobbyMatch(match, db.users, user) : publicMatchForViewer(match, db.users, user));
+    }
+    if (request.method === 'POST' && /^\/api\/matches\/[^/]+\/ready$/.test(url.pathname)) {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      const code = decodeURIComponent(url.pathname.split('/')[3]);
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const match = findMatch(db, code);
+        if (!match) return { status: 404, error: 'Match not found.' };
+        if (match.status !== 'READY_UP' || ![match.creator_id, match.opponent_id].includes(user.id)) return { status: 409, error: 'This match is not waiting for your ready-up.' };
+        match.ready_user_ids ??= [];
+        if (!match.ready_user_ids.includes(user.id)) match.ready_user_ids.push(user.id);
+        const bothReady = [match.creator_id, match.opponent_id].every((id) => match.ready_user_ids.includes(id));
+        if (bothReady) match.status = 'IN_PROGRESS';
+        const wagerRecord = db.wagers.find((item) => item.id === match.id);
+        if (wagerRecord) { wagerRecord.status = match.status; wagerRecord.updated_at = new Date().toISOString(); }
+        audit(db, user.id, 'match_ready', { wager_id: match.id, both_ready: bothReady });
+        await writeDb(db);
+        return { status: 200, match: publicMatchForViewer(match, db.users, user) };
+      });
+      return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : outcome.match);
     }
     if (request.method === 'GET' && /^\/api\/matches\/[^/]+\/chat$/.test(url.pathname)) {
       const user = await currentUser(request);
@@ -1317,9 +1386,10 @@ const server = http.createServer(async (request, response) => {
       const db = await readDb();
       const match = findMatch(db, decodeURIComponent(url.pathname.split('/')[3]));
       if (!match) return sendJson(response, 404, { error: 'Match not found.' });
-      if (![match.creator_id, match.opponent_id].includes(user.id) && !isAdmin(user)) return sendJson(response, 403, { error: 'Only match participants can view this chat.' });
-      const messages = (Array.isArray(match.chat_messages) ? match.chat_messages : []).slice(-100).map((message) => publicChatMessage(message, db.users));
-      return sendJson(response, 200, { messages, can_send: [match.creator_id, match.opponent_id].includes(user.id) && !['COMPLETED', 'CANCELLED'].includes(match.status) });
+      if (![match.creator_id, match.opponent_id].includes(user.id) && !isStaff(user)) return sendJson(response, 403, { error: 'Only match participants and staff can view this chat.' });
+      const identitiesRevealed = ['IN_PROGRESS', 'DISPUTED', 'COMPLETED', 'CANCELLED'].includes(match.status);
+      const messages = identitiesRevealed ? (Array.isArray(match.chat_messages) ? match.chat_messages : []).slice(-100).map((message) => publicChatMessage(message, db.users)) : [];
+      return sendJson(response, 200, { messages, can_send: ([match.creator_id, match.opponent_id].includes(user.id) || isStaff(user)) && ['IN_PROGRESS', 'DISPUTED'].includes(match.status), locked_until_ready: !identitiesRevealed });
     }
     if (request.method === 'POST' && /^\/api\/matches\/[^/]+\/chat$/.test(url.pathname)) {
       const user = await currentUser(request);
@@ -1333,8 +1403,8 @@ const server = http.createServer(async (request, response) => {
         const db = await readDb();
         const match = findMatch(db, code);
         if (!match) return { status: 404, error: 'Match not found.' };
-        if (![match.creator_id, match.opponent_id].includes(user.id)) return { status: 403, error: 'Only match participants can send messages.' };
-        if (['COMPLETED', 'CANCELLED'].includes(match.status)) return { status: 409, error: 'This match chat is read-only.' };
+        if (![match.creator_id, match.opponent_id].includes(user.id) && !isStaff(user)) return { status: 403, error: 'Only match participants and staff can send messages.' };
+        if (!['IN_PROGRESS', 'DISPUTED'].includes(match.status)) return { status: 409, error: 'Both players must ready up before match chat opens.' };
         if (activeBan(db, user.id)) return { status: 403, error: 'Banned accounts cannot send messages.' };
         match.chat_messages ??= [];
         const lastMessage = [...match.chat_messages].reverse().find((item) => item.user_id === user.id);
@@ -1410,7 +1480,7 @@ const server = http.createServer(async (request, response) => {
           await writeDb(db);
           return { status: 200, outcome: 'cancelled', match: publicMatch(match, db.users) };
         }
-        if (!['IN_PROGRESS', 'DISPUTED'].includes(match.status) || !match.opponent_id) return { status: 409, error: 'This match can no longer be cancelled.' };
+        if (!['READY_UP', 'IN_PROGRESS', 'DISPUTED'].includes(match.status) || !match.opponent_id) return { status: 409, error: 'This match can no longer be cancelled.' };
         match.cancellation_votes ??= [];
         if (!match.cancellation_votes.includes(user.id)) match.cancellation_votes.push(user.id);
         const bothApproved = [match.creator_id, match.opponent_id].every((id) => match.cancellation_votes.includes(id));
@@ -1499,12 +1569,13 @@ const server = http.createServer(async (request, response) => {
         if (!eligibility.eligible) return { status: 403, error: eligibility.reason };
         joiningUser.locked_balance = money(joiningUser.locked_balance) + money(match.wager_amount);
         match.opponent_id = user.id;
-        match.status = 'IN_PROGRESS';
+        match.status = 'READY_UP';
+        match.ready_user_ids = [];
         const wagerRecord = db.wagers.find((item) => item.id === match.id);
         if (wagerRecord) { wagerRecord.player2_id = user.id; wagerRecord.status = match.status; wagerRecord.updated_at = new Date().toISOString(); }
         audit(db, user.id, 'wager_joined', { wager_id: match.id, amount: match.wager_amount, available_balance_after_reservation: availableBalance(joiningUser) });
         await writeDb(db);
-        return { status: 200, match: publicMatch(match, db.users) };
+        return { status: 200, match: publicMatchForViewer(match, db.users, joiningUser) };
       });
       return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : outcome.match);
     }
@@ -1528,4 +1599,4 @@ if (require.main === module) {
     process.exitCode = 1;
   });
 }
-module.exports = { createTournamentRound, settleMatch, tournamentStandings, publicTournament };
+module.exports = { createTournamentRound, settleMatch, tournamentStandings, publicTournament, staffRole, isOwner, isAdmin, isStaff, publicMatchForViewer, searchRegisteredPlayers };

@@ -15,7 +15,7 @@ const MIN_WITHDRAWAL_AMOUNT = 15_000_000;
 function tagStyle(tag) {
   const normalized = String(tag || '').trim().toLowerCase();
   if (normalized === 'owner') return 'owner';
-  if (normalized === 'staff') return 'staff';
+  if (['staff', 'admin', 'helper'].includes(normalized)) return 'staff';
   return 'rank';
 }
 function renderPlayerTags(tags, extraClass = '', tierBadge = null) {
@@ -97,10 +97,14 @@ async function load() {
   $('#verify2').hidden = isMinecraftVerified;
   $('#profile-minecraft-verified').hidden = !isMinecraftVerified;
   $('#profile-minecraft-verified').textContent = isMinecraftVerified ? `✓ Minecraft verified as ${me.minecraft_username}` : '';
-  $('#admin-nav').hidden = !me.is_admin;
-  $('#admin-nav-label').hidden = !me.is_admin;
+  const hasStaffPanel = Boolean(me.is_admin || me.is_helper);
+  $('#admin-nav').hidden = !hasStaffPanel;
+  $('#admin-nav-label').hidden = !hasStaffPanel;
+  $('#admin-nav').textContent = me.is_helper ? '♜ Helper Panel' : '♛ Admin Panel';
+  $('#admin-nav-label').textContent = me.is_helper ? 'STAFF TOOLS' : 'ADMINISTRATION';
   $('#tournament-admin-shortcut').hidden = !me.is_admin;
-  if (!me.is_admin && $('#admin').classList.contains('active')) showView('matches');
+  document.querySelectorAll('.owner-admin-only').forEach((element) => { element.hidden = !me.is_admin; });
+  if (!hasStaffPanel && $('#admin').classList.contains('active')) showView('matches');
   if (me.avatar_url) ['#avatar','#profile-avatar','#menu-avatar'].forEach(s => { const i=$(s); i.src=me.avatar_url; i.hidden=false; });
   const [matches, recentMatches, announcements] = await Promise.all([api('/api/matches'), api('/api/me/matches').catch(() => []), api('/api/announcements').catch(() => ({ announcements: [] }))]);
   openMatches = matches; renderOpenMatches(); renderSidebarMatches(recentMatches);
@@ -460,7 +464,7 @@ document.addEventListener('keydown', (event) => { if (event.key === 'Escape') cl
 document.querySelectorAll('[data-menu-view]').forEach((button) => button.onclick = () => { showView(button.dataset.menuView); closeHeaderPopovers(); });
 document.querySelectorAll('[data-social]').forEach((button) => button.onclick = () => {
   if (button.dataset.social === 'discord') {
-    window.open('https://discord.gg/6tK8TRgb23', '_blank', 'noopener,noreferrer');
+    window.open('https://discord.gg/donutwagers', '_blank', 'noopener,noreferrer');
     closeHeaderPopovers();
     return;
   }
@@ -516,6 +520,7 @@ $('#tournament-admin-shortcut').onclick = () => { showView('admin'); loadAdmin()
 
 function renderAdminMatches(matches) {
   const list = $('#admin-match-list');
+  if (currentUser?.is_helper) matches = matches.filter((match) => ['IN_PROGRESS', 'DISPUTED'].includes(match.status));
   if (!matches.length) {
     list.innerHTML = '<div class="empty">♛<h2>No matches to review.</h2><p>Open, disputed, and completed matches will appear here.</p></div>';
     return;
@@ -528,11 +533,22 @@ function renderAdminMatches(matches) {
     const winner = match.winner ? `Winner: ${escapeHtml(match.winner)}` : 'No winner recorded';
     const options = opponent ? `<option value="${escapeHtml(creator.id)}">${escapeHtml(creator.username)} wins</option><option value="${escapeHtml(opponent.id)}">${escapeHtml(opponent.username)} wins</option>` : '';
     const action = match.status === 'COMPLETED' ? 'Overturn / Set winner' : 'Set winner';
-    return `<article class="admin-match" data-admin-match="${escapeHtml(match.match_code)}"><div><span class="admin-state">${status}</span><h2>${names}</h2><p>Match ${escapeHtml(match.match_code)} · ${Number(match.wager_amount || 0).toLocaleString()} per player · ${winner}</p><div class="admin-match-meta"><span>${escapeHtml(match.game_mode || 'Duel')}</span><span>${escapeHtml(match.rules || 'No rules recorded')}</span>${match.settled_at ? `<span>Settled ${escapeHtml(new Date(match.settled_at).toLocaleString())}</span>` : ''}</div></div><div class="admin-match-actions">${opponent ? `<select aria-label="Select corrected winner">${options}</select><button data-admin-resolve> ${action}</button>` : '<span class="search-empty">A second player must join before this match can be resolved.</span>'}</div></article>`;
+    return `<article class="admin-match" data-admin-match="${escapeHtml(match.match_code)}"><div><span class="admin-state">${status}</span><h2>${names}</h2><p>Match ${escapeHtml(match.match_code)} · ${Number(match.wager_amount || 0).toLocaleString()} per player · ${winner}</p><div class="admin-match-meta"><span>${escapeHtml(match.game_mode || 'Duel')}</span><span>${escapeHtml(match.rules || 'No rules recorded')}</span>${match.settled_at ? `<span>Settled ${escapeHtml(new Date(match.settled_at).toLocaleString())}</span>` : ''}<a href="${escapeHtml(match.match_url)}">Open room & chat →</a></div></div><div class="admin-match-actions">${opponent ? `<select aria-label="Select corrected winner">${options}</select><button data-admin-resolve> ${action}</button>` : '<span class="search-empty">A second player must join before this match can be resolved.</span>'}</div></article>`;
   }).join('');
 }
 async function loadAdmin() {
-  if (!currentUser?.is_admin) return;
+  if (!currentUser?.is_admin && !currentUser?.is_helper) return;
+  $('#admin-role-heading').textContent = currentUser.is_helper ? 'Helper Panel' : 'Admin Panel';
+  $('#admin-role-kicker').textContent = currentUser.is_helper ? 'HELPER TOOLS' : 'OWNER CONTROLS';
+  $('#admin-role-intro').textContent = currentUser.is_helper
+    ? 'Helpers can review match tickets and force a winner. Wallet, tournament, announcement, ban, and role controls remain unavailable.'
+    : 'Owner and Admin controls are permission-checked on the server and recorded in the audit log.';
+  if (!currentUser.is_admin) {
+    $('#admin-match-list').innerHTML = '<div class="empty"><h2>Loading match reviews…</h2></div>';
+    try { renderAdminMatches((await api('/api/admin/matches')).matches); }
+    catch (error) { $('#admin-match-list').innerHTML = `<div class="empty"><h2>Unable to load match reviews.</h2><p>${escapeHtml(error.message)}</p></div>`; }
+    return;
+  }
   ensureAnnouncementAdmin();
   ensureTournamentFields();
   ensureSnipeAdmin();
@@ -683,7 +699,7 @@ function renderAdminPlayers(players, query) {
   if (!players.length) { destination.innerHTML = '<div class="search-empty">No matching player.</div>'; return; }
   destination.innerHTML = players.map((player) => {
     const identity = player.minecraft_username ? `Minecraft: ${escapeHtml(player.minecraft_username)}` : `Discord ID: ${escapeHtml(player.discord_id)}`;
-    if (player.is_admin) return `<article class="admin-player"><span><b>${escapeHtml(player.username)}</b>${renderPlayerTags(player.tags, 'admin-tags')}<small>${identity} · Owner account</small></span><button disabled>Protected</button></article>`;
+    if (player.is_owner) return `<article class="admin-player"><span><b>${escapeHtml(player.username)}</b>${renderPlayerTags(player.tags, 'admin-tags')}<small>${identity} · Owner account</small></span><button disabled>Protected</button></article>`;
     const banned = Boolean(player.ban);
     return `<article class="admin-player"><span><b>${escapeHtml(player.username)}</b>${renderPlayerTags(player.tags, 'admin-tags')}<small>${identity}${banned ? ` · Banned: ${escapeHtml(player.ban.reason)}` : ''}</small></span><div class="admin-player-actions"><button class="tag-edit" data-admin-player-action="tags" data-admin-player="${escapeHtml(player.discord_id)}">Tags</button><button class="${banned ? 'unban' : ''}" data-admin-player-action="${banned ? 'unban' : 'ban'}" data-admin-player="${escapeHtml(player.discord_id)}">${banned ? 'Unban' : 'Ban'}</button></div></article>`;
   }).join('');
