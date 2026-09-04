@@ -2,6 +2,7 @@ package org.example;
 
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TextComponent;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.raphimc.minecraftauth.MinecraftAuth;
 import net.raphimc.minecraftauth.java.JavaAuthManager;
 import net.raphimc.minecraftauth.java.model.MinecraftProfile;
@@ -18,6 +19,7 @@ import org.geysermc.mcprotocollib.network.packet.Packet;
 import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
 import org.geysermc.mcprotocollib.protocol.data.game.chat.ChatTypeDecoration;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundPlayerChatPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundDisguisedChatPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundSystemChatPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.ServerboundChatCommandPacket;
 import org.geysermc.mcprotocollib.protocol.packet.login.clientbound.ClientboundCustomQueryPacket;
@@ -130,6 +132,23 @@ public final class App {
                 if (packet instanceof ClientboundCustomQueryPacket query) {
                     if (debugChat) System.out.printf("Login custom query: channel=%s id=%d%n", query.getChannel(), query.getMessageId());
                     session.send(new ServerboundCustomQueryAnswerPacket(query.getMessageId()));
+                    return;
+                }
+
+                if (packet instanceof ClientboundDisguisedChatPacket chat) {
+                    String message = plainText(chat.getMessage()).trim();
+                    String sender = plainText(chat.getName()).trim();
+                    String combined = (sender + " " + message).trim();
+                    if (debugChat) {
+                        System.out.printf("Disguised chat: sender=%s content=%s%n", sender, message);
+                        appendDiagnosticMessage("Disguised: " + combined);
+                    }
+                    PaymentMessage payment = extractPayment(message, paymentPatterns, botUsername);
+                    if (payment == null) payment = extractPayment(combined, paymentPatterns, botUsername);
+                    if (payment != null) {
+                        System.out.printf("Received payment confirmation from %s for %,d.%n", payment.minecraftUsername(), payment.amount());
+                        forwardDeposit(backendClient, backendUrl, webhookSecret, payment.minecraftUsername(), payment.amount());
+                    }
                     return;
                 }
 
@@ -362,9 +381,7 @@ public final class App {
     }
 
     private static String plainText(Component component) {
-        StringBuilder value = new StringBuilder();
-        appendPlainText(component, value);
-        return value.toString();
+        return PlainTextComponentSerializer.plainText().serialize(component);
     }
 
     private static void appendPlainText(Component component, StringBuilder value) {
@@ -374,7 +391,7 @@ public final class App {
 
     private static boolean isPrivateMessageForThisBot(ClientboundPlayerChatPacket chat, String target) {
         // A target name only exists for targeted player chat. Servers may display it as the
-        // recipient name or as “You”, so it must not be compared to the bot's own name.
+        // recipient name or as "You", so it must not be compared to the bot's own name.
         if (!target.isBlank()) return true;
         if (!chat.getChatType().isCustom()) return false;
         ChatTypeDecoration decoration = chat.getChatType().custom().chat();

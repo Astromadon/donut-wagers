@@ -555,6 +555,8 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'GET' && url.pathname === '/match.css') return serveFile(response, 'match.css', 'text/css; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/match.js') return serveFile(response, 'match.js', 'application/javascript; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/donutwagers-world.png') return serveBinaryFile(response, 'donutwagers-world.png', 'image/png');
+    if (request.method === 'GET' && url.pathname === '/dw-logo.png') return serveBinaryFile(response, 'dw-logo.png', 'image/png');
+    if (request.method === 'GET' && url.pathname === '/donutwagers-community.png') return serveBinaryFile(response, 'donutwagers-community.png', 'image/png');
     if (request.method === 'GET' && url.pathname === '/how-it-works') return serveFile(response, 'how-it-works.html', 'text/html; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/rules') return serveFile(response, 'rules.html', 'text/html; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/auth/discord') {

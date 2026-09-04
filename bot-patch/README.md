@@ -4,6 +4,12 @@ The source file in this folder is a validated replacement for `C:\DonutWagersBot
 
 Copy [App.java](App.java) over that file, then run the bot with these environment variables in the same terminal:
 
+The bot must also include this dependency in `app/build.gradle` so formatted DonutSMP receipts are converted to searchable plain text instead of being silently missed:
+
+```gradle
+implementation 'net.kyori:adventure-text-serializer-plain:4.25.0'
+```
+
 ```powershell
 $env:DONUT_WAGERS_API_URL = 'http://localhost:3000'
 $env:DONUT_WAGERS_BOT_WEBHOOK_SECRET = 'the-same-long-random-value-as-the-website'
