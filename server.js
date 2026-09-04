@@ -479,6 +479,13 @@ async function serveFile(response, filename, contentType) {
   }
   catch { sendJson(response, 500, { error: 'Application asset unavailable.' }); }
 }
+async function serveBinaryFile(response, filename, contentType) {
+  try {
+    const content = await fs.readFile(path.join(ROOT, 'public', filename));
+    response.writeHead(200, { 'Content-Type': contentType, 'Content-Length': content.length, 'Cache-Control': 'public, max-age=86400' });
+    response.end(content);
+  } catch { sendJson(response, 404, { error: 'Application asset unavailable.' }); }
+}
 
 async function handleDiscordCallback(request, response, url) {
   const providerError = url.searchParams.get('error');
@@ -547,6 +554,7 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'GET' && url.pathname === '/dashboard.js') return serveFile(response, 'dashboard.js', 'application/javascript; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/match.css') return serveFile(response, 'match.css', 'text/css; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/match.js') return serveFile(response, 'match.js', 'application/javascript; charset=utf-8');
+    if (request.method === 'GET' && url.pathname === '/donutwagers-world.png') return serveBinaryFile(response, 'donutwagers-world.png', 'image/png');
     if (request.method === 'GET' && url.pathname === '/how-it-works') return serveFile(response, 'how-it-works.html', 'text/html; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/rules') return serveFile(response, 'rules.html', 'text/html; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/auth/discord') {
