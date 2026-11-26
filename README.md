@@ -115,7 +115,7 @@ Third-party assets, all stored locally: Inter (SIL OFL 1.1, via @fontsource-vari
 - [Deployment](docs/DEPLOYMENT.md): first deployment, data migration, going back
 - [Operations](docs/OPERATIONS.md): backup, recovery, monitoring, incidents, capacity
 - [PvP tiers](docs/TIERS.md): MCTiers integration
-- [Referrals](docs/REFERRALS.md): links, the 1M reward, review rules
+- [Referrals](docs/REFERRALS.md): links, milestone rewards, Minecraft verification rules, admin review
 - [Match pages](docs/MATCHES.md): match page, history, spectators, rematch, data
 - [AI Support](docs/AI_SUPPORT.md): the support page, turning AI answers on, limits, privacy
 - [Security](docs/SECURITY.md) and [Testing](docs/TESTING.md)

@@ -718,7 +718,7 @@ registerPage('app', (page) => {
     try {
       await post('/api/admin/features', { key: input.dataset.switch, enabled });
       toast(`${label} is ${enabled ? 'on' : 'off'}.`);
-      await Promise.all([loadSwitches(), refreshViewer()]);
+      await Promise.all([loadSwitches(), refreshViewer(), loadAdminReferrals()]);
     } catch (error) { input.checked = !enabled; toast(error.message, true); input.disabled = false; }
   }
   function tierHealth(tiers) {
@@ -729,54 +729,139 @@ registerPage('app', (page) => {
     await withBusy(button, async () => { await post('/api/me/tiers/refresh'); toast('Checking your rankings. This can take a minute.'); await refreshViewer(); setTimeout(() => refreshViewer().catch(() => undefined), 5000); });
   }
   /* ---------- Referrals ---------- */
-  const REFERRAL_STAGES = { joined: ['Signed up', 'Needs to verify Minecraft and play a match', ''], verified: ['Verified', 'Pays once they settle a wager against someone else', 'tag-gold'], paid: ['Paid', 'Reward added to your balance', 'tag-good'], review: ['In review', 'Staff are checking this reward', ''], rejected: ['Not paid', 'Staff did not approve this reward', 'tag-bad'], left: ['Left', 'This account was deleted', ''] };
+  const REFERRAL_STATUS = { pending: ['Waiting for Minecraft', 'Counts once they verify their Minecraft account', ''], qualified: ['Qualified', 'Counts toward your rewards', 'tag-good'], in_review: ['In review', 'Staff are checking this referral', 'tag-gold'], rejected: ['Not counted', 'This referral did not qualify', 'tag-bad'] };
+  const rewardArt = (milestone) => (milestone.icon === 'snipes' ? '<img src="/items/snipe.png" alt="" width="44" height="44">' : `<svg class="reward-art" aria-hidden="true"><use href="/icons.svg#reward-${milestone.icon}"/></svg>`);
   let referralRequest = 0;
+  let referralData = null;
+  function referralMilestone(milestone, index, data) {
+    const next = data.milestones.find((item) => item.state === 'locked');
+    const status = milestone.state === 'claimed' ? `<span class="milestone-status is-claimed">${icon('check')}Claimed</span>`
+      : milestone.state === 'available' ? (data.enabled ? (data.can_claim ? `<button class="btn btn-small btn-primary milestone-claim" type="button" data-claim="${milestone.count}">Claim ${escapeHtml(milestone.label)}</button>` : '<a class="milestone-status is-hint" href="/profile/connections">Verify Minecraft to claim</a>') : '<span class="milestone-status">Paused</span>')
+      : milestone === next ? `<span class="milestone-status is-next">${milestone.remaining} more friend${milestone.remaining === 1 ? '' : 's'} to invite</span>` : '<span class="milestone-status">Locked</span>';
+    return `<li class="milestone is-${milestone.state}" style="--i:${index}"><span class="milestone-icon">${rewardArt(milestone)}${milestone.state === 'locked' ? `<i class="milestone-lock" aria-hidden="true">${icon('lock')}</i>` : ''}${milestone.state === 'claimed' ? `<i class="milestone-done" aria-hidden="true">${icon('check')}</i>` : ''}</span>
+      <small>${milestone.count} friend${milestone.count === 1 ? '' : 's'}</small><b>${escapeHtml(milestone.label)}</b>${status}</li>`;
+  }
   async function loadReferrals() {
     const box = $('#referrals-content');
     const request = ++referralRequest;
     try {
       const data = await api('/api/me/referrals');
       if (request !== referralRequest) return;
-      const reward = shortAmount(data.reward);
-      box.innerHTML = `${data.enabled ? '' : `<div class="notice notice-warn">${icon('info')}<span>Referral rewards are paused right now. Invites still count; rewards wait for a staff check.</span></div>`}
-        <section class="referral-hero panel"><div><small>Your reward</small><h2>Earn <b class="num">${reward}</b> for every friend who plays</h2><p>Share your link. When someone signs up through it, verifies their Minecraft account and settles their first wager, <b>${fullNumber(data.reward)}</b> is added to your balance.</p></div>
-          <div class="referral-link"><label for="referral-link-input">Your link</label><div><input id="referral-link-input" class="input" value="${escapeHtml(data.link)}" readonly><button class="btn btn-primary" type="button" data-copy="${escapeHtml(data.link)}" data-copy-message="Referral link copied.">${icon('copy')}Copy link</button></div><small>Code <b class="num">${escapeHtml(data.code)}</b> <button class="text-link" type="button" data-copy="${escapeHtml(data.code)}" data-copy-message="Code copied.">Copy code</button></small></div></section>
-        <dl class="referral-stats">${[['Invited', fullNumber(data.totals.invited)], ['Rewards paid', fullNumber(data.totals.paid)], ['Earned', shortAmount(data.totals.earned)], ['In review', fullNumber(data.totals.review)]].map(([label, value]) => `<div class="panel"><dt>${label}</dt><dd class="num">${escapeHtml(value)}</dd></div>`).join('')}</dl>
-        <section class="form-card"><h2>People you invited</h2>${data.invited.length ? `<ul class="referral-list">${data.invited.map((item) => { const [label, hint, tone] = REFERRAL_STAGES[item.stage] || REFERRAL_STAGES.joined; return `<li><span class="avatar-initial" aria-hidden="true">${escapeHtml(item.username.slice(0, 1).toUpperCase())}</span><div><b>${escapeHtml(item.username)}</b><small>Joined ${escapeHtml(timeAgo(item.joined_at))} · ${escapeHtml(hint)}</small></div><span class="tag ${tone}">${escapeHtml(label)}${item.stage === 'paid' && item.reward ? ` +${escapeHtml(shortAmount(item.reward))}` : ''}</span></li>`; }).join('')}</ul>` : emptyState('users', 'No one yet', 'Send your link to a friend. They appear here as soon as they sign up.')}</section>
+      const firstDraw = !referralData;
+      const previous = referralData;
+      referralData = data;
+      box.innerHTML = `${data.enabled ? '' : `<div class="notice notice-warn ref-off">${icon('info')}<span><b>The referral system is switched off right now.</b> Your progress and claimed rewards are kept. New referrals and claims are paused until it is back.</span></div>`}
+        <section class="ref-banner${firstDraw ? ' is-entering' : ''}">
+          <div class="ref-banner-text"><h2>Bring your friends.<span>Unlock rewards.</span></h2><p>Share your referral link with friends. Each friend counts toward your rewards once they successfully verify their Minecraft account.</p></div>
+          <div class="ref-link-card"><label for="referral-link-input">Your referral link</label><div class="ref-link-row"><input id="referral-link-input" class="input" value="${escapeHtml(data.link || '')}" readonly ${data.enabled ? '' : 'disabled'}><button class="btn btn-primary ref-copy" type="button" data-ref-copy ${data.enabled ? '' : 'disabled'}><span class="ref-copy-icon">${icon('copy')}</span><span class="ref-copy-done">${icon('check')}</span><span class="ref-copy-text">Copy</span></button></div><small>Code <b class="num">${escapeHtml(data.code || '')}</b></small></div>
+        </section>
+        <dl class="ref-stats">
+          <div class="panel"><dd class="num" data-stat="pending">${fullNumber(data.totals.pending)}</dd><dt>Waiting for Minecraft verification</dt></div>
+          <div class="panel"><dd class="num" data-stat="qualified">${fullNumber(data.totals.qualified)}</dd><dt>Qualified friends</dt></div>
+        </dl>
+        <section class="ref-progress panel" aria-labelledby="ref-progress-title">
+          <h2 id="ref-progress-title">Your Progress</h2>
+          <div class="ref-bar"><div class="ref-bar-track" role="progressbar" aria-label="Qualified friends toward the last reward" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${data.progress}"><span style="--fill:${previous ? previous.progress / 100 : 0}"></span></div><b class="num">${data.progress}%</b></div>
+          <ol class="milestones">${data.milestones.map((milestone, index) => referralMilestone(milestone, index, data)).join('')}</ol>
+          ${data.totals.in_review ? `<p class="muted ref-review">${fullNumber(data.totals.in_review)} referral${data.totals.in_review === 1 ? ' is' : 's are'} being checked by staff and will count once approved.</p>` : ''}
+        </section>
+        <section class="form-card"><h2>Friends you invited</h2>${data.invited.length ? `<ul class="referral-list">${data.invited.map((item) => { const [label, hint, tone] = REFERRAL_STATUS[item.status] || REFERRAL_STATUS.pending; return `<li><span class="avatar-initial" aria-hidden="true">${escapeHtml(item.username.slice(0, 1).toUpperCase())}</span><div><b>${escapeHtml(item.username)}</b><small>Joined ${escapeHtml(timeAgo(item.joined_at))} · ${escapeHtml(hint)}</small></div><span class="tag ${tone}">${escapeHtml(label)}</span></li>`; }).join('')}</ul>` : emptyState('users', 'No friends yet', 'Send your link. Friends appear here as soon as they sign up.')}</section>
         <section class="form-card"><h2>How it works</h2><ol class="referral-rules">
-          <li>Your friend opens your link and signs in with Discord for the first time. Existing accounts can’t be added later, except with a code in their first ${data.code_window_hours} hours.</li>
-          <li>They verify their Minecraft account and confirm they are 18 or older.</li>
-          <li>They settle their first wager against anyone except you. Then ${fullNumber(data.reward)} is added to your balance, once per friend.</li>
-          <li>Rewards for the same person on two accounts, or many rewards in one day, are checked by staff first. Fake accounts and arranged matches lead to rejected rewards and bans.</li></ol></section>
-        ${data.referred_by ? `<p class="muted">You were invited by <b>${escapeHtml(data.referred_by)}</b>.</p>` : data.can_enter_code ? `<form class="form-card referral-code" id="referral-code-form"><h2>Got a code from a friend?</h2><div><label class="sr-only" for="referral-code-input">Friend’s code</label><input id="referral-code-input" class="input" maxlength="8" autocomplete="off" spellcheck="false" placeholder="ABCD2345"><button class="btn" type="submit">Add code</button></div><small>You can add one within ${data.code_window_hours} hours of joining, before your first settled match.</small></form>` : ''}`;
-    } catch (error) { if (request === referralRequest) box.innerHTML = `<div class="notice notice-bad">${icon('alert')}<span>${escapeHtml(error.message)}</span></div>`; }
+          <li>Your friend opens your link and signs in with Discord for the first time. They show as waiting.</li>
+          <li>They verify their own Minecraft account in game. That makes them a qualified friend. A Minecraft account that was ever verified on another DonutWagers account doesn’t count.</li>
+          <li>Rewards unlock at 1, 3, 5 and 10 qualified friends: 5 snipes, then 5M, 10M and 30M (45M in total). Claim each one once.</li>
+          <li>Verify your own Minecraft account before claiming. Fake or duplicate accounts are not counted and can lead to a ban.</li></ol></section>
+        ${data.referred_by ? `<p class="muted">You were invited by <b>${escapeHtml(data.referred_by)}</b>.</p>` : data.can_enter_code ? `<form class="form-card referral-code" id="referral-code-form"><h2>Got a code from a friend?</h2><div><label class="sr-only" for="referral-code-input">Friend’s code</label><input id="referral-code-input" class="input" maxlength="8" autocomplete="off" spellcheck="false" placeholder="ABCD2345"><button class="btn" type="submit">Add code</button></div><small>Add it within ${data.code_window_hours} hours of joining and before you verify your Minecraft account.</small></form>` : ''}`;
+      // The bar moves from where it was to where it is now.
+      requestAnimationFrame(() => requestAnimationFrame(() => $('.ref-bar-track span')?.style.setProperty('--fill', data.progress / 100)));
+      if (previous) data.milestones.forEach((milestone, index) => { if (previous.milestones[index]?.state !== milestone.state) $$('.milestone')[index]?.classList.add('is-changed'); });
+    } catch (error) { if (request === referralRequest) box.innerHTML = `<div class="notice notice-bad">${icon('alert')}<span>${escapeHtml(error.message)}</span><button class="btn btn-small" type="button" data-ref-retry>Try again</button></div>`; }
   }
+  page.on(document, 'click', async (event) => {
+    const copy = event.target.closest('[data-ref-copy]');
+    if (copy && referralData?.link) {
+      await copyText(referralData.link, 'Referral link copied.');
+      copy.classList.add('is-copied');
+      setTimeout(() => copy.classList.remove('is-copied'), 1800);
+      return;
+    }
+    if (event.target.closest('[data-ref-retry]')) { loadReferrals(); return; }
+    const claim = event.target.closest('[data-claim]');
+    if (!claim) return;
+    const milestone = referralData?.milestones.find((item) => String(item.count) === claim.dataset.claim);
+    await withBusy(claim, async () => {
+      const result = await post('/api/me/referrals/claim', { milestone: Number(claim.dataset.claim) });
+      // Shown as claimed only now that the server has confirmed it.
+      claim.closest('.milestone')?.classList.add('is-claiming');
+      toast(result.amount ? `${fullNumber(result.amount)} added to your balance.` : `${result.snipes} snipes added.`);
+      await Promise.all([refreshAccount(), new Promise((resolve) => setTimeout(resolve, 450))]);
+      await loadReferrals();
+      $(`.milestone:nth-child(${referralData.milestones.indexOf(referralData.milestones.find((item) => item.count === milestone?.count)) + 1}) .milestone-status`)?.setAttribute('tabindex', '-1');
+    });
+  });
   page.on(document, 'submit', (event) => {
     if (event.target.id !== 'referral-code-form') return;
     event.preventDefault();
-    withBusy($('button', event.target), async () => { await post('/api/me/referrals/code', { code: $('#referral-code-input').value }); toast('Code added. Your friend gets the reward when you settle your first match.'); await loadReferrals(); });
+    withBusy($('button', event.target), async () => { await post('/api/me/referrals/code', { code: $('#referral-code-input').value }); toast('Code added. It counts for your friend once you verify your Minecraft account.'); await loadReferrals(); });
   });
+
+  /* ---------- Admin: referrals ---------- */
+  const adminReferrals = { status: '', q: '', page: 1 };
+  function reasonDialog(title, confirm, danger) {
+    return new Promise((resolve) => {
+      const dialog = document.createElement('dialog');
+      dialog.setAttribute('aria-labelledby', 'reason-title');
+      dialog.innerHTML = `<form class="dialog-body" method="dialog"><div class="dialog-head"><div><h2 id="reason-title">${escapeHtml(title)}</h2><p>The reason is kept in the audit log.</p></div></div><label class="field"><span>Reason</span><input class="input" name="reason" maxlength="300" required minlength="3" autocomplete="off"></label><div class="dialog-actions"><button class="btn btn-quiet" type="button" value="no">Back</button><button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" type="submit" value="yes">${escapeHtml(confirm)}</button></div></form>`;
+      const input = dialog.querySelector('input');
+      dialog.addEventListener('click', (event) => { if (event.target === dialog || event.target.value === 'no') dialog.close(''); });
+      dialog.querySelector('form').addEventListener('submit', (event) => { event.preventDefault(); if (input.value.trim().length >= 3) dialog.close(input.value.trim()); });
+      dialog.addEventListener('close', () => { resolve(dialog.returnValue || null); dialog.remove(); });
+      document.body.append(dialog);
+      dialog.showModal();
+    });
+  }
   async function loadAdminReferrals() {
     const box = $('#admin-referrals');
     if (!box) return;
     try {
-      const data = await api('/api/admin/referrals');
-      $('#admin-referral-count').textContent = data.totals.review || '';
-      const row = (item) => `<article class="admin-row panel" data-referral="${escapeHtml(item.id)}"><div><h3><span>${escapeHtml(item.referrer?.username || 'Deleted')}</span><span class="muted">invited</span><span>${escapeHtml(item.referred?.username || 'Deleted')}</span><span class="tag ${item.status === 'paid' ? 'tag-good' : item.status === 'review' ? 'tag-gold' : 'tag-bad'}">${escapeHtml(item.status === 'review' ? 'In review' : item.status === 'paid' ? 'Paid' : 'Rejected')}</span></h3>
-        <p>${fullNumber(item.amount)} · ${escapeHtml(timeAgo(item.created_at))}${item.match_code ? ` · <a class="text-link" href="/matches/${escapeHtml(item.match_code)}">match #${escapeHtml(item.match_code)}</a>` : ''}${item.reason ? ` · ${escapeHtml(item.reason)}` : ''}</p>
-        <p class="muted">Minecraft: ${escapeHtml(item.referrer?.minecraft_username || '–')} → ${escapeHtml(item.referred?.minecraft_username || '–')}</p></div>
-        ${item.status === 'review' ? '<div class="action-row"><button class="btn btn-small btn-primary" type="button" data-referral-decide="approve">Approve and pay</button><button class="btn btn-small btn-danger" type="button" data-referral-decide="reject">Reject</button></div>' : ''}</article>`;
-      box.innerHTML = `<section class="panel panel-pad admin-support-summary"><h2>Referral rewards</h2><p class="muted">${fullNumber(data.reward)} per invited player after their first settled wager. Up to ${fullNumber(data.auto_per_day)} rewards per referrer a day are paid automatically; more, or the same Minecraft account on both sides, wait here. ${data.enabled ? '' : '<b>Paying is switched off in Site switches.</b>'}</p>
-        <dl class="summary-list">${[['Players who joined through a link', fullNumber(data.totals.referred_players)], ['Rewards paid', `${fullNumber(data.totals.paid)} (${fullNumber(data.totals.paid_amount)})`], ['Waiting for review', fullNumber(data.totals.review)]].map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl></section>
-        <div class="admin-list">${data.rewards.length ? data.rewards.map(row).join('') : emptyState('users', 'No referral rewards yet', 'They appear here when an invited player settles a first wager.')}</div>`;
+      const params = new URLSearchParams({ page: adminReferrals.page, ...(adminReferrals.status ? { status: adminReferrals.status } : {}), ...(adminReferrals.q ? { q: adminReferrals.q } : {}) });
+      const data = await api(`/api/admin/referrals?${params}`);
+      $('#admin-referral-count').textContent = data.totals.flagged || '';
+      const tone = { pending: '', qualified: 'tag-good', flagged: 'tag-gold', rejected: 'tag-bad' };
+      const label = { pending: 'Waiting for Minecraft', qualified: 'Qualified', flagged: 'Flagged', rejected: 'Rejected' };
+      const who = (person) => (person ? `<b>${escapeHtml(person.username)}</b> <span class="muted">${person.minecraft_verified ? `Minecraft ${escapeHtml(person.minecraft_username)}` : 'Minecraft not verified'}</span>` : '<b>Deleted</b>');
+      const row = (item) => `<article class="admin-row panel" data-referral="${escapeHtml(item.id)}"><div><h3>${who(item.referrer)}<span class="muted">invited</span>${who(item.referred)}<span class="tag ${tone[item.status]}">${label[item.status]}</span></h3>
+        <p>Joined ${escapeHtml(timeAgo(item.created_at))} by ${item.source === 'code' ? 'code' : 'link'}${item.qualified_at ? ` · qualified ${escapeHtml(timeAgo(item.qualified_at))}` : ''}${item.decided_by ? ` · decided by ${escapeHtml(item.decided_by)}` : ''}</p>
+        ${item.flags.length ? `<p class="admin-flag">${icon('alert')}${escapeHtml(item.flags.join('; '))}</p>` : ''}${item.reason ? `<p class="muted">Reason: ${escapeHtml(item.reason)}</p>` : ''}</div>
+        <div class="action-row">${item.status === 'flagged' ? '<button class="btn btn-small btn-primary" type="button" data-referral-decide="approve">Approve</button>' : ''}${['flagged', 'qualified'].includes(item.status) ? '<button class="btn btn-small btn-danger" type="button" data-referral-decide="reject">Reject</button>' : ''}</div></article>`;
+      const t = data.totals;
+      box.innerHTML = `<section class="panel panel-pad admin-support-summary"><div class="admin-ref-toggle"><div><h2>Enable Referral System</h2><p class="muted">When off: no new referrals, qualifications or claims, and the Referrals page says so. Nothing is deleted; waiting referrals are checked again when it is switched back on.</p></div><input class="switch" type="checkbox" role="switch" aria-label="Enable Referral System" data-switch="referrals" ${data.enabled ? 'checked' : ''}></div>
+          <dl class="summary-list">${[['Total referrals', t.referrals], ['Waiting for Minecraft', t.pending], ['Qualified', t.qualified], ['Flagged for review', t.flagged], ['Rejected', t.rejected], ['Rewards claimed', t.claims], ['Currency paid out', fullNumber(t.currency)], ['Snipes given', t.snipes], ...(t.earlier_payouts ? [['Earlier one-per-invite payouts', `${t.earlier_payouts} (${fullNumber(t.earlier_amount)})`]] : [])].map(([name, value]) => `<div><dt>${name}</dt><dd>${escapeHtml(String(value))}</dd></div>`).join('')}</dl></section>
+        <div class="toolbar admin-ref-tools"><div class="segmented" role="group" aria-label="Referral status">${[['', 'All'], ['flagged', 'Flagged'], ['pending', 'Waiting'], ['qualified', 'Qualified'], ['rejected', 'Rejected']].map(([value, text]) => `<button type="button" data-ref-status="${value}" aria-pressed="${adminReferrals.status === value}">${text}</button>`).join('')}</div><label class="lobby-search"><span class="sr-only">Search referrals by player</span>${icon('search')}<input id="admin-ref-search" class="input" type="search" value="${escapeHtml(adminReferrals.q)}" placeholder="Player" maxlength="32"></label></div>
+        <div class="admin-list">${data.referrals.length ? data.referrals.map(row).join('') : emptyState('users', 'No referrals here', 'Referrals appear when someone signs up through a link.')}</div>${historyPager(data.page, data.pages).replaceAll('data-history-page', 'data-ref-page')}
+        ${data.claims.length ? `<section class="panel panel-pad"><h2 class="admin-support-heading">Reward claims</h2><ul class="admin-claims">${data.claims.map((item) => `<li><b>${escapeHtml(item.user?.username || 'Deleted')}</b><span>${item.milestone} friend${item.milestone === 1 ? '' : 's'}: ${item.snipes ? `${item.snipes} snipes` : fullNumber(item.amount)}</span><small>${escapeHtml(timeAgo(item.claimed_at))}</small></li>`).join('')}</ul></section>` : ''}
+        ${data.earlier_review.length ? `<section class="panel panel-pad"><h2 class="admin-support-heading">Earlier one-per-invite rewards waiting</h2>${data.earlier_review.map((item) => `<article class="admin-row" data-earlier="${escapeHtml(item.id)}"><div><b>${escapeHtml(item.referrer?.username || 'Deleted')}</b> invited <b>${escapeHtml(item.referred?.username || 'Deleted')}</b> · ${fullNumber(item.amount)} · ${escapeHtml(item.reason || '')}</div><div class="action-row"><button class="btn btn-small" type="button" data-earlier-decide="approve">Pay</button><button class="btn btn-small btn-danger" type="button" data-earlier-decide="reject">Reject</button></div></article>`).join('')}</section>` : ''}`;
     } catch (error) { box.innerHTML = `<div class="notice notice-bad">${icon('alert')}<span>${escapeHtml(error.message)}</span></div>`; }
   }
+  let adminRefTimer = null;
+  page.on(document, 'input', (event) => { if (event.target.id !== 'admin-ref-search') return; clearTimeout(adminRefTimer); adminRefTimer = setTimeout(() => { adminReferrals.q = event.target.value.trim(); adminReferrals.page = 1; loadAdminReferrals().then(() => $('#admin-ref-search')?.focus()); }, 300); });
   page.on(document, 'click', async (event) => {
+    const status = event.target.closest('[data-ref-status]');
+    if (status) { adminReferrals.status = status.dataset.refStatus; adminReferrals.page = 1; loadAdminReferrals(); return; }
+    const pager = event.target.closest('[data-ref-page]');
+    if (pager) { adminReferrals.page = Number(pager.dataset.refPage); loadAdminReferrals(); return; }
+    const earlier = event.target.closest('[data-earlier-decide]');
+    if (earlier) {
+      const reason = await reasonDialog(earlier.dataset.earlierDecide === 'approve' ? 'Pay this earlier reward?' : 'Reject this earlier reward?', earlier.dataset.earlierDecide === 'approve' ? 'Pay' : 'Reject', earlier.dataset.earlierDecide !== 'approve');
+      if (reason) withBusy(earlier, async () => { await post(`/api/admin/referral-rewards/${encodeURIComponent(earlier.closest('[data-earlier]').dataset.earlier)}/${earlier.dataset.earlierDecide}`, { reason }); await loadAdminReferrals(); });
+      return;
+    }
     const button = event.target.closest('[data-referral-decide]');
     if (!button) return;
     const approve = button.dataset.referralDecide === 'approve';
-    if (!await confirmDialog({ title: approve ? 'Pay this referral reward?' : 'Reject this referral reward?', body: approve ? 'The amount is added to the referrer’s balance now.' : 'It will never be paid. The referred player is not affected.', confirm: approve ? 'Pay reward' : 'Reject', danger: !approve })) return;
-    withBusy(button, async () => { await post(`/api/admin/referrals/${encodeURIComponent(button.closest('[data-referral]').dataset.referral)}/${button.dataset.referralDecide}`, {}); toast(approve ? 'Reward paid.' : 'Reward rejected.'); await loadAdminReferrals(); });
+    const reason = await reasonDialog(approve ? 'Approve this referral?' : 'Reject this referral?', approve ? 'Approve' : 'Reject', !approve);
+    if (!reason) return;
+    withBusy(button, async () => { await post(`/api/admin/referrals/${encodeURIComponent(button.closest('[data-referral]').dataset.referral)}/${button.dataset.referralDecide}`, { reason }); toast(approve ? 'Referral approved. It now counts.' : 'Referral rejected.'); await loadAdminReferrals(); });
   });
 
   /* ---------- Support queue and AI usage ---------- */

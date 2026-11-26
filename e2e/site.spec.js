@@ -654,17 +654,37 @@ test('lobby: completed tab, player search, and names that open profiles instead 
   await expect(page.getByRole('group', { name: 'Match status' }).getByRole('button', { name: 'Completed' })).toHaveAttribute('aria-pressed', 'true');
 });
 
-test('referrals: a personal link, the people invited, and a code box for new accounts', async ({ page, server, signIn }) => {
-  server.edit((db) => { Object.assign(db.users[5], { referred_by: 'u1', referred_at: new Date().toISOString() }); db.users[8].created_at = new Date().toISOString(); });
+test('referrals: link, progress, claiming a milestone, and the switched-off state', async ({ page, server, signIn }) => {
+  server.edit((db) => {
+    db.users[1].minecraft_uuid = '00000001-0000-4000-8000-000000000001';
+    db.referrals = [
+      { id: 'u5', referrer_id: 'u1', referred_id: 'u5', source: 'link', status: 'qualified', minecraft_uuid: 'aa', created_at: new Date().toISOString(), qualified_at: new Date().toISOString(), flags: [] },
+      { id: 'u6', referrer_id: 'u1', referred_id: 'u6', source: 'link', status: 'pending', minecraft_uuid: null, created_at: new Date().toISOString(), qualified_at: null, flags: [] },
+    ];
+    Object.assign(db.users[5], { referred_by: 'u1' });
+    Object.assign(db.users[6], { referred_by: 'u1' });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
   await signIn(1);
   await page.goto(`${server.base}/referrals`);
-  await expect(page.getByRole('heading', { name: /Earn 1M for every friend/ })).toBeVisible();
-  const link = await page.locator('#referral-link-input').inputValue();
-  expect(link).toMatch(/\/r\/[A-HJ-NP-Z2-9]{8}$/);
-  await expect(page.locator('.referral-list')).toContainText('Slate');
-  await expect(page.locator('.referral-stats')).toContainText('Invited');
-  await page.getByRole('button', { name: 'Copy link' }).click();
+  await expect(page.getByRole('heading', { name: /Bring your friends\.\s*Unlock rewards\./ })).toBeVisible();
+  expect(await page.locator('#referral-link-input').inputValue()).toMatch(/\/r\/[A-HJ-NP-Z2-9]{8}$/);
+  await expect(page.locator('[data-stat="pending"]')).toHaveText('1');
+  await expect(page.locator('[data-stat="qualified"]')).toHaveText('1');
+  await expect(page.locator('.milestone')).toHaveCount(4);
+  await expect(page.locator('.milestone.is-locked')).toHaveCount(3);
+  await expect(page.locator('.milestone.is-locked').first()).toContainText('2 more friends to invite');
+  await page.locator('[data-ref-copy]').click();
+  await expect(page.locator('[data-ref-copy]')).toHaveClass(/is-copied/);
   await expect(page.locator('#toast')).toHaveText('Referral link copied.');
+  const snipes = await page.locator('#snipes').textContent();
+  await page.getByRole('button', { name: 'Claim 5 Snipes' }).click();
+  await expect(page.locator('.milestone').first()).toContainText('Claimed');
+  await expect(page.locator('#snipes')).toHaveText(String(Number(snipes) + 5));
   const { violations } = await new AxeBuilder({ page }).include('#referrals').withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze();
   expect(violations.map((v) => `${v.id} ${v.nodes[0].target}`)).toEqual([]);
+  await server.as(0).post('/api/admin/features', { key: 'referrals', enabled: false });
+  await page.reload();
+  await expect(page.locator('.ref-off')).toContainText('switched off');
+  await expect(page.locator('.milestone').first()).toContainText('Claimed');
 });

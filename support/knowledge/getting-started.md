@@ -18,6 +18,8 @@ DonutWagers uses DonutSMP in-game money only. Amounts can be typed as 500k, 5m, 
 
 ## Referrals
 - Your personal link is on the Referrals page in the sidebar. Copy it and send it to friends.
-- You get 1,000,000 once per friend who signs up through your link, verifies their Minecraft account, confirms they are 18 or older, and settles their first wager against someone other than you.
-- Your friend gets nothing extra. Existing accounts cannot be added later, except by entering your code in their first 48 hours, before their first settled match.
-- Rewards for the same person on two accounts, or many in one day, are checked by staff first. Fake accounts and arranged matches are rejected and can lead to a ban.
+- A friend counts once they sign up through your link and verify their own Minecraft account in game. Until then they show as waiting.
+- Rewards: 1 qualified friend = 5 snipes, 3 = 5,000,000, 5 = 10,000,000, 10 = 30,000,000 (45M in total). Press Claim on each one. You must verify your own Minecraft account before claiming.
+- Existing accounts cannot be added later. A new player can enter your code within 48 hours of joining and before verifying Minecraft.
+- A Minecraft account that was ever verified on another DonutWagers account does not count, and neither does your own. Many referrals in one day are checked by staff first.
+- If the owner switches referrals off, your progress and claimed rewards are kept.

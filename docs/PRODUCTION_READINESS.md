@@ -117,3 +117,7 @@ Needs review before launch: the drafted rules in `lib/match-rules.js` (disconnec
 ## Update, 26 November 2026: referrals
 
 Referral links and a 1,000,000 reward per invited player who verifies Minecraft and settles a first wager against someone other than the referrer. Held for owner review on the same Minecraft account, more than 10 a day, or when switched off. Verified by 5 API tests and 1 browser test (now 78 API/unit and 41 browser tests passing). Not verified: whether referral rewards are allowed where you operate. Not deployed.
+
+## Update, 26 November 2026: referral system rebuilt
+
+The one-per-invite reward was replaced by milestone rewards (1 = 5 snipes, 3 = 5M, 5 = 10M, 10 = 30M) for friends who complete in-game Minecraft verification with a never-used account ID, a page based on the owner's reference, an Enable Referral System toggle, and an admin review queue with reasons. Verified by 8 API tests (including eight simultaneous claims) and 1 browser test; 79 API/unit and 41 browser tests pass in total. Not deployed. Open: legal review of referral incentives; players verified without an account ID must verify again to count or claim.

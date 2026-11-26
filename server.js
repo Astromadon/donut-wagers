@@ -85,7 +85,7 @@ function loadEnvFile() {
 }
 
 function emptyDb() {
-  return { users: [], sessions: [], matches: [], tournaments: [], announcements: [], settings: { announcements_enabled: true }, minecraft_accounts: [], verification_codes: [], wagers: [], deposits: [], withdrawals: [], audit_logs: [], support_tickets: [], bans: [], unmatched_payments: [], security_events: [], support_conversations: [], support_requests: [], referral_rewards: [], bot_status: { last_heartbeat_at: null, bot_username: donutSmpService.botUsername } };
+  return { users: [], sessions: [], matches: [], tournaments: [], announcements: [], settings: { announcements_enabled: true }, minecraft_accounts: [], verification_codes: [], wagers: [], deposits: [], withdrawals: [], audit_logs: [], support_tickets: [], bans: [], unmatched_payments: [], security_events: [], support_conversations: [], support_requests: [], referral_rewards: [], referrals: [], referral_claims: [], minecraft_identities: [], bot_status: { last_heartbeat_at: null, bot_username: donutSmpService.botUsername } };
 }
 function normalizeDb(db) {
   db ??= emptyDb();
@@ -109,6 +109,9 @@ function normalizeDb(db) {
   db.support_conversations ??= [];
   db.support_requests ??= [];
   db.referral_rewards ??= [];
+  db.referrals ??= [];
+  db.referral_claims ??= [];
+  db.minecraft_identities ??= [];
   // Only a hash of each session token is stored, so a leaked database cannot be used to sign in.
   for (const session of db.sessions) if (!session.hashed) { session.id = hashToken(session.id); session.hashed = true; }
   db.bot_status ??= { last_heartbeat_at: null, bot_username: donutSmpService.botUsername };
@@ -656,6 +659,7 @@ function walletHistory(db, user) {
     if (tournament.winner_id !== user.id || !tournament.prize_paid_at) continue;
     entries.push({ id: tournament.id, type: 'tournament_prize', status: 'completed', amount: money(tournament.winner_prize), created_at: tournament.prize_paid_at, label: tournament.name });
   }
+  for (const item of db.referral_claims || []) if (item.user_id === user.id && item.amount) entries.push({ id: item.id, type: 'referral_reward', status: 'completed', amount: money(item.amount), created_at: item.claimed_at });
   for (const item of db.referral_rewards || []) if (item.referrer_id === user.id && item.status === 'paid') entries.push({ id: item.id, type: 'referral_reward', status: 'completed', amount: money(item.amount), created_at: item.paid_at });
   return entries.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 40);
 }
@@ -680,6 +684,9 @@ function notificationsFor(db, user) {
   }
   for (const deposit of db.deposits) if (deposit.kind === 'wallet' && deposit.user_id === user.id && deposit.status === 'verified') push(`deposit-${deposit.id}`, 'good', 'Deposit confirmed', `${money(deposit.amount).toLocaleString('en-US')} was added to your balance.`, deposit.verified_at, '/wallet');
   for (const withdrawal of db.withdrawals) if (withdrawal.user_id === user.id && withdrawal.completed_at) push(`withdrawal-${withdrawal.id}`, withdrawal.status === 'completed' ? 'good' : 'warn', withdrawal.status === 'completed' ? 'Withdrawal sent' : 'Withdrawal failed', withdrawal.status === 'completed' ? `${money(withdrawal.amount).toLocaleString('en-US')} was paid in game.` : 'Your balance was released.', withdrawal.completed_at, '/wallet');
+  const qualified = (db.referrals || []).filter((item) => item.referrer_id === user.id && item.status === 'qualified');
+  for (const item of qualified) push(`referral-qualified-${item.id}`, 'good', 'Friend qualified', `${db.users.find((other) => other.id === item.referred_id)?.discord_username || 'A friend you invited'} verified their Minecraft account.`, item.qualified_at, '/referrals');
+  if (siteFeatures().referrals) for (const milestone of referrals.MILESTONES) if (qualified.length >= milestone.count && !(db.referral_claims || []).some((item) => item.user_id === user.id && item.milestone === milestone.count)) push(`referral-ready-${milestone.count}`, 'action', 'Referral reward ready', `Claim ${milestone.label} on the Referrals page.`, qualified[milestone.count - 1]?.qualified_at || new Date().toISOString(), '/referrals');
   for (const item of db.referral_rewards || []) if (item.referrer_id === user.id && item.status === 'paid') push(`referral-${item.id}`, 'good', 'Referral reward', `${money(item.amount).toLocaleString('en-US')} was added: ${db.users.find((other) => other.id === item.referred_id)?.discord_username || 'a player you invited'} played their first match.`, item.paid_at, '/referrals');
   for (const item of db.support_requests || []) if (item.user_id === user.id && item.status === 'resolved' && item.resolved_at) push(`support-${item.id}`, 'good', 'Support replied', item.staff_note || 'Staff have answered your request. Check your Discord messages.', item.resolved_at, '/support');
   return items.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 20);
@@ -695,7 +702,7 @@ const SWITCHES = {
   tickets: ['Contact staff', 'Creating Discord support tickets from match rooms.'],
   verification: ['Minecraft verification', 'Linking or renaming Minecraft accounts.'],
   signups: ['New accounts', 'First-time sign-ins. Existing players can still sign in.'],
-  referrals: ['Referral rewards', 'Paying referrers when an invited player settles a first wager. While off, rewards wait for your review.'],
+  referrals: ['Referral system', 'Referral links, new referrals, qualifications and reward claims. While off, nothing is lost: progress and claimed rewards are kept, and waiting referrals are checked again when it is switched back on.'],
   aiSupport: ['AI Support answers', 'AI answers on the Support page. Help articles and “Talk to a person” keep working.'],
 };
 let liveSwitches = null;
@@ -704,7 +711,7 @@ function siteFeatures(db = null) {
   if (db) liveSwitches = db.settings.features || {};
   return Object.fromEntries(Object.keys(SWITCHES).map((key) => [key, typeof liveSwitches?.[key] === 'boolean' ? liveSwitches[key] : CONFIG.features[key]]));
 }
-const SWITCHED_OFF = { wagers: 'Matchmaking is switched off right now.', deposits: 'Deposits are switched off right now.', withdrawals: 'Withdrawals are paused right now. Your balance is safe.', tournaments: 'Tournament sign-ups are switched off right now.', snipes: 'Snipes are switched off right now.', chat: 'Match chat is switched off right now.', tickets: 'Contacting staff from the site is switched off. Use the Discord server.', verification: 'Minecraft verification is switched off right now.', signups: 'New accounts are not being accepted right now.', aiSupport: 'AI answers are switched off right now. You can still talk to a person.', referrals: 'Referral rewards are paused right now.' };
+const SWITCHED_OFF = { wagers: 'Matchmaking is switched off right now.', deposits: 'Deposits are switched off right now.', withdrawals: 'Withdrawals are paused right now. Your balance is safe.', tournaments: 'Tournament sign-ups are switched off right now.', snipes: 'Snipes are switched off right now.', chat: 'Match chat is switched off right now.', tickets: 'Contacting staff from the site is switched off. Use the Discord server.', verification: 'Minecraft verification is switched off right now.', signups: 'New accounts are not being accepted right now.', aiSupport: 'AI answers are switched off right now. You can still talk to a person.', referrals: 'The referral system is switched off right now. Your progress is kept.' };
 function switchedOff(feature) { return siteFeatures()[feature] ? null : { status: 503, error: SWITCHED_OFF[feature], code: 'SWITCHED_OFF' }; }
 function participationBlock(user, feature) {
   if (!siteFeatures()[feature]) return { status: 503, error: SWITCHED_OFF[feature], code: 'SWITCHED_OFF' };
@@ -803,6 +810,25 @@ const tierProvider = createMctiersProvider({ ...CONFIG.tiers, allowHttp: !IS_PRO
 // DonutWagers matches are Crystal PvP and Sword. On MCTiers Crystal PvP is the "vanilla" gamemode.
 const MATCH_TIER_MODES = { crystal: 'vanilla', sword: 'sword' };
 const referrals = createReferrals(CONFIG.referrals);
+const referralChecks = (db) => ({ enabled: () => siteFeatures().referrals, banned: (id) => Boolean(activeBan(db, id)) });
+/** Runs a qualification and writes its audit entry. */
+function auditReferral(db, referral, status) {
+  if (status) audit(db, referral.referrer_id, `referral_${status}`, { referred_user_id: referral.referred_id, reason: referral.decision_reason || referral.flags?.join('; ') || null });
+}
+/** One-time and repeatable housekeeping: identity history, referral records, and waiting referrals. */
+async function reconcileReferrals() {
+  await withEscrowMutation(async () => {
+    const db = await readDb();
+    let changed = referrals.backfillIdentities(db);
+    changed = referrals.backfillReferrals(db) || changed;
+    for (const referral of db.referrals) {
+      if (referral.status !== 'pending') continue;
+      const status = referrals.qualify(db, referral, referralChecks(db));
+      if (status) { auditReferral(db, referral, status); changed = true; }
+    }
+    if (changed) await writeDb(db);
+  });
+}
 const skinHeads = createSkinHeads({ enabled: process.env.SKIN_HEADS_ENABLED !== 'false' });
 TIER_OPTIONS.enabled = tierProvider.enabled;
 const TIER_REQUEST_COOLDOWN_MS = 15 * 60_000;
@@ -878,6 +904,8 @@ function liveFingerprints(db, watched) {
   for (const item of [...db.deposits, ...db.withdrawals]) parts.get(item.user_id)?.push(`${item.id}:${item.status}`);
   for (const item of db.support_requests) parts.get(item.user_id)?.push(`${item.id}:${item.status}`);
   for (const item of db.referral_rewards || []) parts.get(item.referrer_id)?.push(`ref:${item.id}:${item.status}`);
+  for (const item of db.referrals || []) parts.get(item.referrer_id)?.push(`referral:${item.id}:${item.status}`);
+  for (const item of db.referral_claims || []) parts.get(item.user_id)?.push(`claim:${item.id}`);
   for (const user of db.users) if (user.referred_by) parts.get(user.referred_by)?.push(`invited:${user.id}:${user.minecraft_verified}`);
   for (const tournament of db.tournaments) lobby.push(`${tournament.id}:${tournament.status}:${JSON.stringify(tournament.players || tournament.player_ids || []).length}`);
   return { users: new Map([...parts].map(([id, list]) => [id, digest(list.map(String))])), lobby: digest(lobby), matches };
@@ -1065,12 +1093,6 @@ function settleMatch(db, match, winnerId, actorId, source) {
   matchEvent(match, before === 'COMPLETED' ? 'result_corrected' : 'concluded', { winner_side: sideOf(match, winner.id), score: finalScore(match), source }, match.settled_at);
   audit(db, actorId, source === 'admin_override' ? 'match_result_overturned' : 'match_result_settled', { wager_id: match.id, winner_id: winner.id, payout_amount: winnerPayout, platform_fee: platformFee, source });
   advanceTournament(db, match, actorId);
-  // A first settled wager can pay the player's referrer, once.
-  if (before !== 'COMPLETED') {
-    for (const item of referrals.qualify(db, match, { banned: (id) => Boolean(activeBan(db, id)), ageConfirmed: isAgeConfirmed, enabled: () => siteFeatures().referrals })) {
-      audit(db, item.referrer_id, item.status === 'paid' ? 'referral_reward_paid' : 'referral_reward_held', { reward_id: item.id, referred_user_id: item.referred_id, wager_id: match.id, amount: item.amount, reason: item.review_reason });
-    }
-  }
   return { changed: true, match };
 }
 
@@ -1087,7 +1109,7 @@ function exportAccount(db, user) {
     bans: own(db.bans).map((ban) => ({ reason: ban.reason, created_at: ban.created_at, expires_at: ban.expires_at, revoked_at: ban.revoked_at })),
     matches: db.matches.filter((match) => [match.creator_id, match.opponent_id].includes(user.id)).map((match) => ({ match_code: match.match_code, game_mode: match.game_mode, rules: match.rules, wager_amount: match.wager_amount, status: match.status, won: match.winner_id ? match.winner_id === user.id : null, created_at: match.created_at, settled_at: match.settled_at || null, messages: (match.chat_messages || []).filter((message) => message.user_id === user.id).map((message) => ({ body: message.body, created_at: message.created_at })) })),
     ...supportService.exportFor(db, user.id),
-    referrals: { code: user.referral_code || null, referred_by: user.referred_by ? 'yes' : null, rewards: (db.referral_rewards || []).filter((item) => item.referrer_id === user.id).map((item) => ({ amount: item.amount, status: item.status, created_at: item.created_at, paid_at: item.paid_at })) },
+    referrals: { code: user.referral_code || null, referred_by: user.referred_by ? 'yes' : null, invited: (db.referrals || []).filter((item) => item.referrer_id === user.id).map((item) => ({ status: item.status, created_at: item.created_at, qualified_at: item.qualified_at })), claims: (db.referral_claims || []).filter((item) => item.user_id === user.id).map(({ milestone, snipes, amount, claimed_at }) => ({ milestone, snipes, amount, claimed_at })), earlier_rewards: (db.referral_rewards || []).filter((item) => item.referrer_id === user.id).map((item) => ({ amount: item.amount, status: item.status, created_at: item.created_at, paid_at: item.paid_at })) },
     activity: own(db.audit_logs).map((entry) => ({ action: entry.action, details: entry.details, created_at: entry.created_at })),
   };
 }
@@ -1455,7 +1477,7 @@ async function handleRequest(request, response, requestId) {
     if (request.method === 'GET' && /^\/r\/[A-Za-z0-9]{1,16}$/.test(url.pathname)) {
       // A referral link: remembered for 30 days, used only if this visitor creates a new account.
       const code = url.pathname.slice(3).toUpperCase();
-      const valid = referrals.CODE.test(code) && referrals.referrerFor(await readDb(), code);
+      const valid = siteFeatures().referrals && referrals.CODE.test(code) && referrals.referrerFor(await readDb(), code);
       if (valid && !(await currentUser(request))) appendCookie(response, 'dw_ref', code, { maxAge: 30 * 86_400 });
       return redirect(response, valid ? '/?invited=1' : '/');
     }
@@ -1472,7 +1494,7 @@ async function handleRequest(request, response, requestId) {
           return own;
         });
       }
-      return sendJson(response, 200, { ...referrals.overview(await readDb(), stored, APP_BASE_URL), enabled: siteFeatures().referrals });
+      return sendJson(response, 200, referrals.overview(await readDb(), stored, APP_BASE_URL, siteFeatures().referrals));
     }
     if (request.method === 'POST' && url.pathname === '/api/me/referrals/code') {
       const user = await currentUser(request);
@@ -1490,32 +1512,84 @@ async function handleRequest(request, response, requestId) {
       });
       return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : { added: true });
     }
+    if (request.method === 'POST' && url.pathname === '/api/me/referrals/claim') {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      const { milestone } = await readJson(request);
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const own = db.users.find((item) => item.id === user.id);
+        const result = referrals.claim(db, own, milestone, referralChecks(db));
+        if (result.error || result.repeated) return result;
+        audit(db, user.id, 'referral_reward_claimed', { milestone: result.claim.milestone, snipes: result.claim.snipes, amount: result.claim.amount, qualified: result.claim.qualified_at_claim });
+        await writeDb(db);
+        return result;
+      });
+      if (outcome.error) return sendJson(response, outcome.status, { error: outcome.error, code: outcome.code });
+      const { milestone: reached, snipes, amount, claimed_at } = outcome.claim;
+      return sendJson(response, outcome.status, { claimed: true, repeated: Boolean(outcome.repeated), milestone: reached, snipes, amount, claimed_at });
+    }
     if (request.method === 'GET' && url.pathname === '/api/admin/referrals') {
       const user = await currentUser(request);
       if (!requireAdmin(response, user)) return;
       const db = await readDb();
-      const person = (id) => { const found = db.users.find((item) => item.id === id); return found ? { username: found.discord_username, discord_id: found.discord_id, minecraft_username: found.minecraft_verified ? found.minecraft_username : null } : null; };
-      // Rewards waiting for a decision first, then the newest.
-      const rewards = [...db.referral_rewards].sort((a, b) => (b.status === 'review') - (a.status === 'review') || new Date(b.created_at) - new Date(a.created_at));
-      const paid = db.referral_rewards.filter((item) => item.status === 'paid');
+      const person = (id) => { const found = db.users.find((item) => item.id === id); return found ? { username: found.deleted_at ? 'Deleted player' : found.discord_username, discord_id: found.deleted_at ? null : found.discord_id, minecraft_username: found.minecraft_verified ? found.minecraft_username : null, minecraft_verified: Boolean(found.minecraft_verified), created_at: found.created_at || null } : null; };
+      const status = ['pending', 'qualified', 'flagged', 'rejected'].includes(url.searchParams.get('status')) ? url.searchParams.get('status') : null;
+      const query = String(url.searchParams.get('q') || '').trim().toLowerCase().slice(0, 32);
+      const page = Math.max(1, Math.min(1000, Math.trunc(Number(url.searchParams.get('page')) || 1)));
+      const named = (item) => !query || [item.referrer_id, item.referred_id].some((id) => { const found = db.users.find((entry) => entry.id === id); return found && [found.discord_username, found.discord_id, found.minecraft_username].some((value) => String(value || '').toLowerCase().includes(query)); });
+      // Flagged first, then the newest.
+      const listed = db.referrals.filter((item) => (!status || item.status === status) && named(item)).sort((a, b) => (b.status === 'flagged') - (a.status === 'flagged') || new Date(b.created_at) - new Date(a.created_at));
+      const count = (value) => db.referrals.filter((item) => item.status === value).length;
+      const claims = db.referral_claims;
+      const legacy = db.referral_rewards.filter((item) => item.status === 'paid');
       return sendJson(response, 200, {
-        enabled: siteFeatures().referrals, reward: referrals.reward, auto_per_day: referrals.autoPerDay,
-        totals: { referred_players: db.users.filter((item) => item.referred_by).length, paid: paid.length, paid_amount: paid.reduce((sum, item) => sum + item.amount, 0), review: db.referral_rewards.filter((item) => item.status === 'review').length },
-        rewards: rewards.slice(0, 100).map((item) => ({ id: item.id, status: item.status, amount: item.amount, reason: item.review_reason, created_at: item.created_at, paid_at: item.paid_at, referrer: person(item.referrer_id), referred: person(item.referred_id), match_code: db.matches.find((match) => match.id === item.match_id)?.match_code || null })),
+        enabled: siteFeatures().referrals,
+        milestones: referrals.MILESTONES,
+        totals: { referrals: db.referrals.length, pending: count('pending'), qualified: count('qualified'), flagged: count('flagged'), rejected: count('rejected'), claims: claims.length, currency: claims.reduce((sum, item) => sum + item.amount, 0), snipes: claims.reduce((sum, item) => sum + item.snipes, 0), earlier_payouts: legacy.length, earlier_amount: legacy.reduce((sum, item) => sum + item.amount, 0) },
+        page, pages: Math.max(1, Math.ceil(listed.length / 25)), total: listed.length,
+        referrals: listed.slice((page - 1) * 25, page * 25).map((item) => ({ id: item.referred_id, status: item.status, source: item.source, flags: item.flags || [], reason: item.decision_reason, decided_by: item.decided_by ? (item.decided_by === 'system' ? 'System' : person(item.decided_by)?.username || 'Staff') : null, created_at: item.created_at, qualified_at: item.qualified_at, decided_at: item.decided_at || null, referrer: person(item.referrer_id), referred: person(item.referred_id) })),
+        claims: [...claims].sort((a, b) => new Date(b.claimed_at) - new Date(a.claimed_at)).slice(0, 50).map((item) => ({ user: person(item.user_id), milestone: item.milestone, snipes: item.snipes, amount: item.amount, claimed_at: item.claimed_at })),
+        earlier_review: db.referral_rewards.filter((item) => item.status === 'review').map((item) => ({ id: item.id, amount: item.amount, reason: item.review_reason, referrer: person(item.referrer_id), referred: person(item.referred_id), created_at: item.created_at })),
       });
     }
     if (request.method === 'POST' && /^\/api\/admin\/referrals\/[\w-]{1,40}\/(approve|reject)$/.test(url.pathname)) {
       const user = await currentUser(request);
       if (!requireAdmin(response, user)) return;
-      await readJson(request);
+      const { reason } = await readJson(request);
+      const why = String(reason || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+      if (why.length < 3) return sendJson(response, 400, { error: 'Give a short reason. It is kept in the audit log.' });
       const [, , , , id, decision] = url.pathname.split('/');
       const outcome = await withEscrowMutation(async () => {
         const db = await readDb();
-        const result = referrals.decide(db, id, decision === 'approve', user.id);
+        const result = referrals.decide(db, id, decision === 'approve', user.id, why);
         if (result.error) return result;
-        audit(db, user.id, decision === 'approve' ? 'referral_reward_approved' : 'referral_reward_rejected', { reward_id: id, referrer_id: result.item.referrer_id, amount: result.item.amount });
+        audit(db, user.id, decision === 'approve' ? 'referral_approved' : 'referral_rejected', { referred_user_id: id, referrer_id: result.referral.referrer_id, reason: why });
         await writeDb(db);
-        return { status: 200, item: result.item };
+        return { status: 200, referral: result.referral };
+      });
+      return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : { status: outcome.referral.status });
+    }
+    if (request.method === 'POST' && /^\/api\/admin\/referral-rewards\/[\w-]{1,40}\/(approve|reject)$/.test(url.pathname)) {
+      // Rewards from the earlier one-per-invite scheme that were still waiting for a decision.
+      const user = await currentUser(request);
+      if (!requireAdmin(response, user)) return;
+      const { reason } = await readJson(request);
+      const why = String(reason || '').trim().slice(0, 300);
+      if (why.length < 3) return sendJson(response, 400, { error: 'Give a short reason. It is kept in the audit log.' });
+      const [, , , , id, decision] = url.pathname.split('/');
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const item = db.referral_rewards.find((entry) => entry.id === id);
+        if (!item) return { status: 404, error: 'This reward no longer exists.' };
+        if (item.status !== 'review') return { status: 409, error: 'This reward was already decided.' };
+        const referrer = db.users.find((entry) => entry.id === item.referrer_id);
+        const time = new Date().toISOString();
+        if (decision === 'approve') { if (!referrer || referrer.deleted_at) return { status: 409, error: 'The referrer’s account no longer exists.' }; referrer.balance = ledger(referrer.balance) + money(item.amount); Object.assign(item, { status: 'paid', paid_at: time, decided_by: user.id }); }
+        else Object.assign(item, { status: 'rejected', decided_by: user.id, decided_at: time });
+        audit(db, user.id, decision === 'approve' ? 'referral_reward_approved' : 'referral_reward_rejected', { reward_id: id, referrer_id: item.referrer_id, amount: item.amount, reason: why });
+        await writeDb(db);
+        return { status: 200, item };
       });
       return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : { status: outcome.item.status });
     }
@@ -2057,6 +2131,8 @@ async function handleRequest(request, response, requestId) {
         const db = await readDb();
         const before = siteFeatures(db)[key];
         db.settings.features = { ...db.settings.features, [key]: enabled };
+        siteFeatures(db);
+        if (key === 'referrals' && enabled) for (const referral of db.referrals) auditReferral(db, referral, referrals.qualify(db, referral, referralChecks(db)));
         if (before !== enabled) audit(db, user.id, 'site_switch_changed', { switch: key, from: before, to: enabled });
         await writeDb(db);
         siteFeatures(db);
@@ -2391,6 +2467,10 @@ async function handleRequest(request, response, requestId) {
         // Money on its way must go to, and be expected from, the account's present name.
         if (current) for (const item of [...db.withdrawals, ...db.deposits]) if (item.user_id === record.user_id && item.status === 'pending') item.minecraft_username = senderUsername;
         audit(db, record.user_id, current ? 'minecraft_renamed' : 'minecraft_verified', { minecraft_uuid: senderUuid, minecraft_username: senderUsername, verification_method: 'bot_private_message' });
+        // The account ID is remembered for good, and a waiting referral can now qualify.
+        referrals.recordIdentity(db, storedUser);
+        const referral = referrals.referralOf(db, storedUser.id);
+        auditReferral(db, referral, referrals.onVerified(db, storedUser, referralChecks(db)));
         await writeDb(db);
         return { status: 200, userId: record.user_id };
       });
@@ -3053,6 +3133,8 @@ async function startServer() {
     await readDb();
   }
   for (const warning of CONFIG.warnings) observability.log('warn', 'configuration', { message: warning });
+  // Safe to run on every start: it only adds history and checks waiting referrals.
+  await reconcileReferrals().catch((error) => observability.log('error', 'referral_reconcile_failed', { message: error.message }));
   setInterval(() => sweepExpired().catch((error) => observability.log('error', 'sweep_failed', { message: error.message })), 30_000).unref();
   setInterval(() => rateLimiter.prune(), 60_000).unref();
   if (tierProvider.enabled) { setInterval(syncTiers, 60_000).unref(); tierProvider.loadModes().catch(() => undefined); }
