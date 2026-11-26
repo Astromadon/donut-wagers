@@ -33,6 +33,9 @@ $env:DONUTWAGERS_JSON_DATA_FILE = 'path\to\backup.json'; npm run import:postgres
 
 ## Regular staff work
 
+- **Bans:** Admin → Players → Ban (reason required; hours, or empty for permanent). The player is signed out, open matches are cancelled and refunded, active ones become disputes, and they are banned on Discord when the bot is set up. The Banned players list under the search shows reason, who banned them and when it ends, with Unban. A banned player’s Minecraft account cannot be verified on another Discord account (shown in Admin → Security).
+- **Verifying a player yourself:** Admin → Players → Verify Minecraft. Type their Java name and a reason; the account ID comes from Mojang. The same conflict and ban checks apply as in-game verification. It is logged, and it does not count as a referral until the player also verifies in game with the bot.
+
 - **Admin, Support:** read the conversation, reply to the player on Discord, then press Mark answered.
 
 - **Admin, Payments, withdrawals under review:** the bot could not confirm a payout. Check in game whether it arrived, then choose paid or refund. The site never sends one twice.

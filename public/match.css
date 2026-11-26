@@ -230,3 +230,14 @@ a.room-chip:hover { border-color: var(--accent-line); color: var(--accent-2); }
   .timeline-step.is-current .timeline-node, .player-head.is-waiting, .chat-connection.is-offline i { animation: none !important; }
   .timeline-track span { transition: none; }
 }
+
+/* Rematch and double */
+.rematch-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.rematch-btn { flex: 1 1 200px; min-height: 46px; }
+.rematch-btn.is-offered { animation: offer-glow 2.2s ease-in-out infinite; }
+@keyframes offer-glow { 50% { box-shadow: 0 0 0 4px rgba(255, 191, 15, .18), 0 0 26px rgba(255, 191, 15, .35); } }
+.rematch-btn.is-chosen { border-color: #2f6b45; background: var(--good-wash); color: var(--good); opacity: 1; }
+.rematch-note { display: flex; gap: 8px; align-items: center; color: var(--text-2); font-size: 14px; }
+.rematch-note .icon { flex: none; width: 16px; height: 16px; color: var(--accent); }
+.rematch-note b { color: var(--text); }
+@media (prefers-reduced-motion: reduce) { .rematch-btn.is-offered { animation: none !important; } }

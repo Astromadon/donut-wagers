@@ -566,3 +566,12 @@ a.history-row:hover { background: var(--panel-2); }
 }
 @media (max-width: 480px) { .podium-box small { display: none; } .podium-box { padding: 8px 4px; } }
 @media (prefers-reduced-motion: reduce) { .podium-spot, .board-row { animation: fade-in .12s linear both !important; } }
+
+/* Admin: banned players */
+.admin-bans { display: grid; gap: 12px; margin-top: 16px; }
+.admin-bans-head { display: flex; align-items: center; justify-content: space-between; }
+.admin-bans h2 { font-size: 16px; font-weight: 800; }
+.ban-list { display: grid; }
+.ban-list li { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 10px 0; border-top: 1px solid var(--line); }
+.ban-list small { display: block; color: var(--text-3); font-size: 12.5px; }
+.ban-history summary { color: var(--text-2); font-size: 13px; cursor: pointer; }

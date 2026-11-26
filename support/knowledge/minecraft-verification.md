@@ -21,3 +21,6 @@ Open Profile, then Connections, and press "Update name". Verify again with the n
 
 ## Disconnecting
 You can disconnect Minecraft in Connections, but not while you have open or active matches or a withdrawal in progress.
+
+## If the in-game code does not work
+Use "Talk to a person". Staff can verify your Minecraft account for you after checking it is yours. Referral rewards still need the in-game check, so you can verify in game later with the same name. A Minecraft account that belongs to a banned DonutWagers account cannot be verified again.

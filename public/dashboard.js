@@ -708,6 +708,7 @@ registerPage('app', (page) => {
     loadHealth();
     loadSupportQueue();
     loadAdminReferrals();
+    loadBans();
     loadTournaments(true);
     api('/api/announcements').then((result) => { $('#announcement-visible').checked = result.enabled !== false; }).catch(() => undefined);
   }
@@ -1008,7 +1009,8 @@ registerPage('app', (page) => {
         const ban = player.ban;
         const refresh = player.minecraft_uuid ? `<button class="btn btn-small" type="button" data-admin-player="tiers" data-id="${id}">Refresh tiers</button>` : '';
         const signOut = player.is_owner ? '' : `<button class="btn btn-small" type="button" data-admin-player="signout" data-id="${id}">Sign out</button>`;
-        const actions = refresh + signOut + (player.is_owner ? '<span class="tag">Protected</span>' : `<button class="btn btn-small" type="button" data-admin-player="tags" data-id="${id}">Tags</button>${ban ? `<button class="btn btn-small btn-good" type="button" data-admin-player="unban" data-id="${id}">Unban</button>` : player.is_admin ? '' : `<button class="btn btn-small btn-danger" type="button" data-admin-player="ban" data-id="${id}">Ban</button>`}`);
+        const verify = ban ? '' : `<button class="btn btn-small" type="button" data-admin-player="verify" data-id="${id}">${player.minecraft_verified ? 'Change Minecraft' : 'Verify Minecraft'}</button>`;
+        const actions = refresh + verify + signOut + (player.is_owner ? '<span class="tag">Protected</span>' : `<button class="btn btn-small" type="button" data-admin-player="tags" data-id="${id}">Tags</button>${ban ? `<button class="btn btn-small btn-good" type="button" data-admin-player="unban" data-id="${id}">Unban</button>` : player.is_admin ? '' : `<button class="btn btn-small btn-danger" type="button" data-admin-player="ban" data-id="${id}">Ban</button>`}`);
         return `<article class="admin-row panel"><div><h3 class="admin-title-row"><span>${escapeHtml(player.username)}</span>${siteTierBadges(player.tiers)}${playerTags(player.tags)}${ban ? '<span class="tag tag-bad">Banned</span>' : ''}</h3><p>${player.minecraft_username ? `${escapeHtml(player.minecraft_username)}, ` : ''}Discord ID ${id}${ban ? `. Reason: ${escapeHtml(ban.reason)}${ban.expires_at ? `, until ${escapeHtml(new Date(ban.expires_at).toLocaleString())}` : ', permanent'}` : ''}</p>${player.minecraft_uuid ? `<p class="muted admin-uuid">Minecraft ID ${escapeHtml(player.minecraft_uuid)}. ${escapeHtml(tierSummary(player.tiers))}${player.tiers_error ? ` Last error: ${escapeHtml(player.tiers_error)}` : ''}</p>` : ''}</div><div class="admin-actions">${actions}</div></article>`;
       }).join('') : emptyState('search', 'No matching player', 'Try a Discord ID or a Minecraft name.');
     } catch (error) { if (request === adminSearchRequest) box.innerHTML = emptyState('alert', 'Search failed', error.message); }
@@ -1027,14 +1029,45 @@ registerPage('app', (page) => {
       $('#tags-title').textContent = `Tags for ${player.username}`;
       $('#tags-form').elements.tags.value = (player.tags || []).join(', ');
       $('#tags-dialog').showModal();
+    } else if (button.dataset.adminPlayer === 'verify') {
+      $('#verify-player-form').reset();
+      $('#verify-player-title').textContent = `Verify Minecraft for ${player.username}`;
+      $('#verify-player-dialog').showModal();
     } else if (button.dataset.adminPlayer === 'ban') {
       $('#ban-form').reset();
       $('#ban-title').textContent = `Ban ${player.username}`;
       $('#ban-dialog').showModal();
     } else if (await confirmDialog({ title: `Unban ${player.username}?`, body: 'They can log in and play again immediately.', confirm: 'Unban' })) {
-      withBusy(button, async () => { await post(`/api/admin/players/${encodeURIComponent(player.discord_id)}/unban`); toast(`${player.username} was unbanned.`); await searchAdminPlayers(); });
+      withBusy(button, async () => { await post(`/api/admin/players/${encodeURIComponent(player.discord_id)}/unban`); toast(`${player.username} was unbanned.`); await Promise.all([searchAdminPlayers(), loadBans()]); });
     }
   }
+  $('#verify-player-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const form = event.target;
+    if (!selectedPlayer) return;
+    withBusy($('button[type="submit"]', form), async () => {
+      const result = await post(`/api/admin/players/${encodeURIComponent(selectedPlayer.discord_id)}/minecraft`, { minecraft_username: form.elements.minecraft_username.value.trim(), reason: form.elements.reason.value.trim() });
+      $('#verify-player-dialog').close();
+      toast(`${selectedPlayer.username} is verified as ${result.minecraft_username}.`);
+      await searchAdminPlayers();
+    });
+  });
+  async function loadBans() {
+    const box = $('#admin-bans');
+    if (!box) return;
+    try {
+      const { active, recent } = await api('/api/admin/bans');
+      const row = (ban) => `<li><div><b>${escapeHtml(ban.player?.username || 'Deleted player')}</b>${ban.player?.minecraft_username ? ` <span class="muted">Minecraft ${escapeHtml(ban.player.minecraft_username)}</span>` : ''}<small>${escapeHtml(ban.reason)} · by ${escapeHtml(ban.by || 'staff')} · ${escapeHtml(timeAgo(ban.created_at))} · ${ban.revoked_at ? `unbanned ${escapeHtml(timeAgo(ban.revoked_at))}` : ban.expires_at ? (ban.active ? `ends ${escapeHtml(new Date(ban.expires_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }))}` : 'ended') : 'permanent'}</small></div>${ban.active && ban.player?.discord_id ? `<button class="btn btn-small btn-good" type="button" data-unban="${escapeHtml(ban.player.discord_id)}" data-name="${escapeHtml(ban.player.username)}">Unban</button>` : ''}</li>`;
+      box.innerHTML = `${active.length ? `<ul class="ban-list">${active.map(row).join('')}</ul>` : '<p class="muted">Nobody is banned right now.</p>'}${recent.length ? `<details class="ban-history"><summary>Earlier bans (${recent.length})</summary><ul class="ban-list">${recent.map(row).join('')}</ul></details>` : ''}`;
+    } catch (error) { box.innerHTML = `<p class="support-error">${icon('alert')}${escapeHtml(error.message)}</p>`; }
+  }
+  page.on(document, 'click', async (event) => {
+    if (event.target.closest('[data-bans-refresh]')) { loadBans(); return; }
+    const button = event.target.closest('[data-unban]');
+    if (!button) return;
+    if (!await confirmDialog({ title: `Unban ${button.dataset.name}?`, body: 'They can log in and play again immediately.', confirm: 'Unban' })) return;
+    withBusy(button, async () => { await post(`/api/admin/players/${encodeURIComponent(button.dataset.unban)}/unban`); toast(`${button.dataset.name} was unbanned.`); await loadBans(); });
+  });
   $('#ban-form')?.addEventListener('submit', (event) => {
     event.preventDefault();
     const form = event.target;
@@ -1042,7 +1075,7 @@ registerPage('app', (page) => {
       await post(`/api/admin/players/${encodeURIComponent(selectedPlayer.discord_id)}/ban`, { reason: form.elements.reason.value.trim(), duration_hours: form.elements.duration.value || null });
       $('#ban-dialog').close();
       toast(`${selectedPlayer.username} was banned.`);
-      await searchAdminPlayers();
+      await Promise.all([searchAdminPlayers(), loadBans()]);
     });
   });
   $('#tags-form')?.addEventListener('submit', (event) => {

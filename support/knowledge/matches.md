@@ -32,7 +32,8 @@ Press Join match on an open match. Your entry is locked straight away. The other
 ## Match page, history and rematches
 - Every match has its own page with the settings, a progress timeline, both players, the rules and the match chat. Anyone signed in can open it; only the two players and staff can chat or act.
 - Open any player’s profile and press View Matches to see their match history; every match there opens in full, including old ones.
-- After a settled match, both players can press Rematch within 30 minutes. When both agree, a new match with the same settings starts at ready-up and both entries are locked.
+- After a settled match, both players can press Rematch (same entry) or Double (twice the entry) within 30 minutes. A new match with the same settings starts at ready-up only when both pick the same option, and both entries are locked.
+- Matches are anonymous: you can’t see who you are playing until both players have pressed Ready. If a match is cancelled before it starts, it stays anonymous. A snipe is the only way to see an open match’s creator.
 
 ## Statistics
 Your statistics show wins, losses, win rate, profit, streaks and tournament results. You can feature one of your winning wager matches on your profile.

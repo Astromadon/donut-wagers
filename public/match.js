@@ -187,7 +187,7 @@ registerPage('room', (page) => {
     const participant = match.viewer_is_participant;
     if (isOpenMatch()) {
       const expiry = '<p class="field-hint" data-expires></p>';
-      if (match.is_creator) return ['', `${heading('Waiting for an opponent', 'Share the link, or leave it open for anyone in the lobby.')}<button class="command" type="button" data-copy="${escapeHtml(link())}" data-copy-message="Match link copied."><code>${escapeHtml(link())}</code>${icon('copy')}</button>${expiry}`];
+      if (match.is_creator) return null;
       if (!me.minecraft_verified) return ['', `${heading('Verify Minecraft to join', 'You need a verified account before you can enter a match.')}<a class="btn btn-primary btn-large" href="/profile/connections">Verify Minecraft</a>${expiry}`];
       if (me.balance < match.wager_amount) return ['', `${heading('Add funds to join', `The entry is ${fullNumber(match.wager_amount)} and you have ${fullNumber(me.balance)} available.`)}<a class="btn btn-primary btn-large" href="/wallet">Make a deposit</a>${expiry}`];
       return ['', `${heading('Take this match', 'Your entry is locked as soon as you join.')}<button class="btn btn-primary btn-large" type="button" data-do="join">Join for ${fullNumber(match.wager_amount)}</button>${expiry}`];
@@ -214,9 +214,9 @@ registerPage('room', (page) => {
     }
     if (match.status === 'COMPLETED') {
       const score = match.final_score ? ` ${match.final_score[match.winner_side]}–${match.final_score[match.winner_side === 'creator' ? 'opponent' : 'creator']}` : '';
-      const rematch = participant && (match.can_rematch || match.rematch_code) ? (match.rematch_code ? `<a class="btn btn-primary" href="/matches/${escapeHtml(match.rematch_code)}">${icon('swords')}Go to the rematch</a>` : match.viewer_voted_rematch ? '<button class="btn" type="button" disabled>Rematch requested</button>' : `<button class="btn btn-primary" type="button" data-do="rematch">${icon('refresh')}${match.rematch_vote_count ? 'Accept rematch' : 'Rematch'}</button>`) : '';
-      if (participant && match.winner_id === me.id) return ['is-good', `${heading(`You won${score}`, match.tournament_id ? 'The bracket updates when the round is complete.' : 'Paid to your balance:')}${match.tournament_id ? '' : `<div class="display num payout">+${fullNumber(match.payout_amount)}</div>`}<div class="action-row">${rematch}<a class="btn" href="/matches">Find another match</a></div>`];
-      if (participant) return ['is-quiet', `${heading(`${match.winner || 'Your opponent'} won${score}`, 'The result is on your record. If it’s wrong, contact staff with your proof.')}<div class="action-row">${rematch}<a class="btn" href="/matches">Find another match</a></div>`];
+      const rematch = participant && (match.can_rematch || match.rematch_code) ? rematchButtons() : '';
+      if (participant && match.winner_id === me.id) return ['is-good', `${heading(`You won${score}`, match.tournament_id ? 'The bracket updates when the round is complete.' : 'Paid to your balance:')}${match.tournament_id ? '' : `<div class="display num payout">+${fullNumber(match.payout_amount)}</div>`}${rematch}<div class="action-row"><a class="btn btn-quiet" href="/matches">Find another match</a></div>`];
+      if (participant) return ['is-quiet', `${heading(`${match.winner || 'Your opponent'} won${score}`, 'The result is on your record. If it’s wrong, contact staff with your proof.')}${rematch}<div class="action-row"><a class="btn btn-quiet" href="/matches">Find another match</a></div>`];
       return ['is-quiet', heading(`${match.winner || 'A player'} won${score}`, match.payout_amount ? `${fullNumber(match.payout_amount)} was paid out${match.settled_at ? ` ${timeAgo(match.settled_at)}` : ''}.` : '')];
     }
     if (match.status === 'CANCELLED') {
@@ -224,6 +224,22 @@ registerPage('room', (page) => {
       return ['is-quiet', `${heading(match.result_state === 'expired' ? 'Match expired' : 'Match cancelled', text)}<a class="btn" href="/matches">Back to matches</a>`];
     }
     return ['is-quiet', heading('Waiting for an update')];
+  }
+  /** Rematch for the same entry, or double it. A new match starts once both players pick the same. */
+  function rematchButtons() {
+    if (match.rematch_code) return `<a class="btn btn-primary" href="/matches/${escapeHtml(match.rematch_code)}">${icon('swords')}Go to the rematch</a>`;
+    const offer = match.rematch_offer || {};
+    const amounts = match.rematch_amounts || { same: match.wager_amount, double: match.wager_amount * 2 };
+    const other = match.viewer_side === 'creator' ? match.opponent : match.creator;
+    const button = (stake) => {
+      const label = stake === 'double' ? 'Double' : 'Rematch';
+      const amount = shortAmount(amounts[stake]);
+      if (offer.mine === stake) return `<button class="btn rematch-btn is-chosen" type="button" disabled>${icon('check')}${label} requested · ${amount}</button>`;
+      const accepting = offer.theirs === stake;
+      return `<button class="btn ${accepting ? 'btn-primary is-offered' : offer.theirs ? '' : stake === 'double' ? 'btn-gold' : 'btn-primary'} rematch-btn" type="button" data-do="rematch" data-stake="${stake}">${icon(stake === 'double' ? 'coins' : 'refresh')}${accepting ? `Accept ${label.toLowerCase()}` : label} · ${amount}</button>`;
+    };
+    const note = offer.theirs && offer.theirs !== offer.mine ? `<p class="rematch-note">${icon('info')}<span><b>${escapeHtml(other || 'Your opponent')}</b> wants ${offer.theirs === 'double' ? `to double: <b>${fullNumber(amounts.double)}</b> each` : `a rematch for <b>${fullNumber(amounts.same)}</b> each`}.</span></p>` : offer.mine && !offer.theirs ? `<p class="rematch-note">${icon('clock')}<span>Waiting for your opponent to accept.</span></p>` : '';
+    return `${note}<div class="rematch-row">${button('same')}${button('double')}</div>`;
   }
   function secondaryActions() {
     const participant = match.viewer_is_participant;
@@ -247,7 +263,9 @@ registerPage('room', (page) => {
     timeline();
     players();
     rules();
-    const [tone, content] = nextAction();
+    const next = nextAction();
+    $('#action').hidden = !next;
+    const [tone, content] = next || ['', ''];
     const cancelNotice = match.viewer_is_participant && match.cancellation_vote_count && !match.viewer_voted_cancel && ['READY_UP', 'IN_PROGRESS', 'DISPUTED'].includes(match.status) ? `<div class="notice notice-warn">${icon('info')}<span>Your opponent asked to cancel. Both entries are returned if you accept below.</span></div>` : '';
     // The action panel keeps typed scores: it is redrawn only when what it offers changes.
     if (draw('action', $('#action'), [tone, cancelNotice, content, me?.balance], () => cancelNotice + content)) $('#action').className = `action panel ${tone}`;
@@ -297,7 +315,7 @@ registerPage('room', (page) => {
     const mc = (side) => minecraftOf(side);
     const reasons = { expired: 'Nobody joined within 30 minutes, so the match expired. The entry was returned.', ready_timeout: 'Both players did not ready up within 15 minutes. Both entries were returned.', mutual_cancellation: 'Both players agreed to cancel. Both entries were returned.', creator_cancelled_before_join: `${who} cancelled the match before anyone joined.` };
     switch (event.type) {
-      case 'created': return event.rematch_of ? `Rematch of #${escapeHtml(event.rematch_of)} created with the same settings.` : `<b>${escapeHtml(who)}</b> created this ${escapeHtml(modeName(match))} match.`;
+      case 'created': return event.rematch_of ? `${event.stake === 'double' ? 'Double-or-nothing rematch' : 'Rematch'} of #${escapeHtml(event.rematch_of)}, same settings${event.stake === 'double' ? ', double the entry' : ''}.` : `<b>${escapeHtml(who)}</b> created this ${escapeHtml(modeName(match))} match.`;
       case 'joined': return `<b>${escapeHtml(who)}</b> joined. Both players have 15 minutes to ready up.`;
       case 'ready': return `<b>${escapeHtml(who)}</b> is ready.`;
       case 'started': return `Both players are ready. The match has started.${mc('creator') && mc('opponent') ? ` <b>${escapeHtml(mc('creator'))}</b> or <b>${escapeHtml(mc('opponent'))}</b> sends the duel on ${escapeHtml(match.rules_panel?.server?.address || 'the duel server')}.` : ''}`;
@@ -308,9 +326,9 @@ registerPage('room', (page) => {
       case 'concluded': return `Match over. <b>${escapeHtml(winner || 'The winner')}</b> won${escapeHtml(score)}.`;
       case 'cancellation_requested': return `<b>${escapeHtml(who)}</b> asked to cancel the match.`;
       case 'cancelled': return escapeHtml(reasons[event.reason] || 'The match was cancelled. Locked entries were returned.').replace(escapeHtml(who), `<b>${escapeHtml(who)}</b>`);
-      case 'rematch_requested': return `<b>${escapeHtml(who)}</b> voted to rematch.`;
+      case 'rematch_requested': return event.stake === 'double' ? `<b>${escapeHtml(who)}</b> wants to double: ${escapeHtml(fullNumber(event.amount))} each.` : `<b>${escapeHtml(who)}</b> wants a rematch${event.amount ? ` for ${escapeHtml(fullNumber(event.amount))} each` : ''}.`;
       case 'rematch_failed': return 'The rematch couldn’t start, so the votes were cleared.';
-      case 'rematch_created': return `Rematch created. <a class="text-link" href="/matches/${escapeHtml(event.code)}">Open match #${escapeHtml(event.code)}</a>`;
+      case 'rematch_created': return `${event.stake === 'double' ? 'Double' : 'Rematch'} accepted${event.amount ? ` for ${escapeHtml(fullNumber(event.amount))} each` : ''}. <a class="text-link" href="/matches/${escapeHtml(event.code)}">Open match #${escapeHtml(event.code)}</a>`;
       default: return '';
     }
   }
@@ -441,13 +459,16 @@ registerPage('room', (page) => {
     },
     async rematch(button) {
       if (!await ensureAllowed('wagers')) return;
-      const accepting = match.rematch_vote_count > 0;
-      const agreed = await confirmDialog({ title: accepting ? 'Accept the rematch?' : 'Ask for a rematch?', body: accepting ? 'A new match with the same settings starts at ready-up, and both entries are locked now.' : 'If your opponent agrees within 30 minutes, a new match with the same settings starts and both entries are locked.', rows: [['Entry', fullNumber(match.wager_amount), true]], confirm: accepting ? 'Start rematch' : 'Ask for rematch' });
+      const stake = button.dataset.stake === 'double' ? 'double' : 'same';
+      const amount = (match.rematch_amounts || {})[stake] || (stake === 'double' ? match.wager_amount * 2 : match.wager_amount);
+      const accepting = match.rematch_offer?.theirs === stake;
+      const word = stake === 'double' ? 'double' : 'rematch';
+      const agreed = await confirmDialog({ title: accepting ? `Accept the ${word}?` : stake === 'double' ? 'Ask to double?' : 'Ask for a rematch?', body: accepting ? 'A new match with the same settings starts at ready-up, and both entries are locked now.' : `If your opponent picks the same within 30 minutes, a new match with the same settings starts and both entries are locked.`, rows: [['Entry each', fullNumber(amount), true], ['Winner gets', fullNumber(winnerPayout(amount))]], confirm: accepting ? `Start ${word}` : stake === 'double' ? 'Ask to double' : 'Ask for rematch' });
       if (!agreed) return;
       await withBusy(button, async () => {
-        const result = await post(apiPath('rematch'), {});
+        const result = await post(apiPath('rematch'), { stake });
         if (result.rematch_code) { toast('Rematch ready. Ready up when you can play.'); navigate(`/matches/${result.rematch_code}`); return; }
-        toast('Rematch requested. Waiting for your opponent.');
+        toast(result.outcome === 'different_choice' ? 'You each picked a different entry. The match starts when you both pick the same.' : 'Request sent. Waiting for your opponent.');
         await loadMatch();
       });
     },

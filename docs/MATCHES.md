@@ -23,7 +23,7 @@ Any signed-in player may open any match page.
 - **Players in the match** see everything, can chat once both are ready, and see their own reports.
 - **Staff (the owner)** see everything and can chat.
 - **Spectators** see the match, the result, and the system events. They do not see the private chat, and while a match is live they do not see what each player reported. Every action (ready, report, cancel, rematch, chat, ticket) is refused by the server with 403 or 409.
-- Before both players are ready, names stay hidden from everyone except each player themselves (and from a snipe), as before.
+- **Anonymous until both are ready.** Before both players press Ready, nobody can see who the other player is: not the lobby, the match page, the activity feed, profile histories, profile counters, the cancel response, or a staff ticket (only the person asking is added until both are ready). A match cancelled before it started stays anonymous for good, so sitting out the ready timer reveals nothing. The only exception is a snipe, which reveals a creator on purpose. Tested in `test/anonymity-rematch.test.js`.
 
 ## Data (no new tables)
 
@@ -44,7 +44,7 @@ Matches from before this change have no `events`; their timeline is rebuilt from
 - Every action checks the signed-in account, that it is a player in this match, and the match's current status, inside the locked transaction used for balances.
 - A repeated ready or an identical repeated report changes nothing and adds no event.
 - Scores are checked against the first-to setting (`checkScore`); a winner-only report is still allowed. Differing scores settle the winner without a score.
-- Rematch: within 30 minutes of a settled, non-tournament match, both players vote. The server then checks both players can play (verified, not on a break, age confirmed, enough balance), locks both entries once, and creates the new match at ready-up with the same terms and sides. If either cannot, the votes are cleared. Simultaneous votes create one rematch (tested).
+- Rematch and Double: within 30 minutes of a settled, non-tournament match, each player picks **Rematch** (same entry) or **Double** (twice the entry). A new match starts only when both picked the same; picking differently starts nothing. The server then checks both players can play (verified, not on a break, age confirmed, enough balance), locks both entries once, and creates the new match at ready-up with the same terms and sides. If either cannot, the votes are cleared. Simultaneous votes create one rematch (tested).
 - Finished matches cannot be changed by players. Staff corrections go through the audited admin resolve route and add a `result_corrected` event.
 
 ## Endpoints

@@ -106,7 +106,8 @@ test('full match through the interface: create, cancel, join, ready, report, set
   await dialog.locator('#match-amount').fill('2.5m');
   await expect(dialog.locator('#match-payout')).toHaveText('4,500,000');
   await dialog.locator('#match-submit').click();
-  await expect(page.getByRole('heading', { name: 'Waiting for an opponent' })).toBeVisible();
+  await expect(page.locator('.player-card.is-empty')).toContainText('Waiting for opponent');
+  await expect(page.locator('#action')).toBeHidden();
   await page.getByRole('button', { name: 'Cancel match' }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Cancel match' }).click();
   await expect(page.getByRole('heading', { name: 'Match cancelled' })).toBeVisible();

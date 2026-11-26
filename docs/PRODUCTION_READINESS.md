@@ -147,3 +147,11 @@ Remaining risks, not bugs:
 - rate limits are per server process.
 
 80 API and unit tests and 41 browser tests pass.
+
+## Update, 26 November 2026: anonymity, Double, open-match page
+
+Anonymity until both players are ready was enforced on the main pages; three leaks were found and closed (staff tickets added both players before ready-up, profile counters counted open matches, a cancelled-before-start match revealed both names, and the cancel response returned both names). Rematch now offers Rematch or Double; both must pick the same. The big waiting box for an open match was removed. 84 API/unit and 41 browser tests pass. Not verified: the Discord ticket change against real Discord (tickets are not configured in tests).
+
+## Update, 26 November 2026: bans and staff verification
+
+Bans already existed (reason, timed or permanent, Discord sync, sessions ended, matches refunded). Added: a Banned players list with history and Unban, a ban-evasion block (a banned player's Minecraft account cannot be verified on another account), and owner verification by Minecraft name using Mojang's account ID, with a required reason and audit, which does not count for referrals until the player verifies in game. 3 new API tests; 87 API/unit and 41 browser tests pass. Not verified against the real Mojang API in tests (a local stand-in is used); a manual lookup against Mojang worked.
