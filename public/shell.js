@@ -10,7 +10,7 @@ async function refreshViewer() {
 function renderViewer() {
   const verified = Boolean(me.minecraft_verified && me.minecraft_username);
   $$('.js-username').forEach((element) => { element.textContent = me.username; });
-  $('#balance').textContent = shortAmount(me.balance);
+  showBalance(me.balance);
   $('.balance-amount').dataset.tip = `${fullNumber(me.balance)} available`;
   $('#snipes').textContent = fullNumber(me.snipes);
   $('#verified-badge').hidden = !verified;
@@ -20,12 +20,104 @@ function renderViewer() {
   $$('[data-staff-only]').forEach((element) => { element.hidden = !staff; });
   $$('[data-admin-label]').forEach((element) => { element.textContent = 'Admin Panel'; });
 }
+let shownBalance = null;
+let balanceFrame = 0;
+/** Counts to a new balance instead of jumping, and tints the box green or red for a moment. */
+function showBalance(value) {
+  const element = $('#balance');
+  const box = $('.balance-amount');
+  const from = shownBalance;
+  shownBalance = value;
+  cancelAnimationFrame(balanceFrame);
+  if (from === null || from === value) { element.textContent = shortAmount(value); return; }
+  box.classList.remove('is-up', 'is-down');
+  void box.offsetWidth;
+  box.classList.add(value > from ? 'is-up' : 'is-down');
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches || document.hidden) { element.textContent = shortAmount(value); return; }
+  const start = performance.now();
+  const step = (now) => {
+    const progress = Math.min(1, (now - start) / 500);
+    element.textContent = shortAmount(Math.round(from + (value - from) * (1 - (1 - progress) ** 3)));
+    if (progress < 1) balanceFrame = requestAnimationFrame(step);
+  };
+  balanceFrame = requestAnimationFrame(step);
+}
 /** A lost session reloads the page: the server then shows the login prompt for this address. */
 function handleAuthError(error) { if (error.status === 401 && me) { location.reload(); return true; } return false; }
 async function refreshAccount() {
   if (!me) return;
   try { await Promise.all([refreshViewer(), loadNotifications()]); }
   catch (error) { handleAuthError(error); /* Other failures retry on the next refresh. */ }
+}
+
+/* ---------- Live updates ---------- */
+// One server-sent event stream per tab. The server only says what changed ("account", "lobby", "match");
+// pages then fetch through the normal API. While the stream is down, pages fall back to polling.
+const live = (() => {
+  const listeners = new Map();
+  let source = null;
+  let match = null;
+  let failures = 0;
+  let everConnected = false;
+  let retryTimer = null;
+  let hiddenTimer = null;
+  let connected = false;
+  let paused = false;
+  const emit = (type, data) => listeners.get(type)?.forEach((listener) => listener(data));
+  const setConnected = (value) => { if (connected !== value) { connected = value; emit('status', value); } };
+  function close() { clearTimeout(retryTimer); source?.close(); source = null; setConnected(false); }
+  /** Exponential backoff with jitter, 1 s up to 30 s, so a restart is not met by every tab at once. */
+  function retry(delay) {
+    close();
+    failures += 1;
+    const ceiling = Math.min(30_000, 1000 * 2 ** Math.min(failures - 1, 5));
+    retryTimer = setTimeout(connect, delay ?? ceiling / 2 + Math.random() * ceiling / 2);
+    // Repeated failures may mean the session ended: an account check reloads the page if so.
+    if (failures === 4) refreshAccount();
+  }
+  function connect() {
+    if (!me || paused || !('EventSource' in window)) return;
+    close();
+    source = new EventSource(match ? `/api/events?match=${encodeURIComponent(match)}` : '/api/events');
+    source.addEventListener('ready', () => {
+      const reconnected = everConnected;
+      everConnected = true;
+      failures = 0;
+      setConnected(true);
+      // Anything may have changed while the stream was down.
+      if (reconnected) emit('resync');
+    });
+    for (const type of ['account', 'lobby', 'match']) source.addEventListener(type, (event) => { try { emit(type, JSON.parse(event.data)); } catch { /* Ignore a bad frame. */ } });
+    source.addEventListener('signed-out', () => { close(); location.reload(); });
+    // Another tab took this stream's place; this tab keeps working by polling until it is used again.
+    source.addEventListener('replaced', () => { close(); paused = true; });
+    source.addEventListener('restart', () => retry(1000 + Math.random() * 4000));
+    source.onerror = () => retry();
+  }
+  document.addEventListener('visibilitychange', () => {
+    clearTimeout(hiddenTimer);
+    // A tab left in the background gives its stream back after a few minutes.
+    if (document.hidden) hiddenTimer = setTimeout(() => { if (document.hidden) { close(); paused = true; } }, 5 * 60_000);
+    else if (paused || !source) { paused = false; connect(); emit('resync'); }
+  });
+  window.addEventListener('online', () => { if (!connected) { failures = 0; connect(); } });
+  return {
+    connect,
+    get connected() { return connected; },
+    on(type, listener) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type).add(listener); return () => listeners.get(type).delete(listener); },
+    /** Match rooms also receive changes for their own match. */
+    watch(code) { if (match === code) return; match = code; if (source || everConnected) { failures = 0; connect(); } },
+  };
+})();
+/** Runs `work` once at a time: a change arriving mid-fetch queues exactly one more run. */
+function coalesce(work) {
+  let running = null;
+  let again = false;
+  return function run() {
+    if (running) { again = true; return running; }
+    running = Promise.resolve().then(work).catch(() => undefined).finally(() => { running = null; if (again) { again = false; run(); } });
+    return running;
+  };
 }
 
 /* ---------- Pages ---------- */
@@ -39,6 +131,7 @@ function mountPage() {
   const controller = new AbortController();
   const timers = new Set();
   const listeners = new Set();
+  const unsubscribes = new Set();
   const page = {
     root,
     // Scoped to this page's elements, so a late response can only touch the page it belongs to.
@@ -47,10 +140,20 @@ function mountPage() {
     on: (target, type, listener) => target.addEventListener(type, listener, { signal: controller.signal }),
     interval: (work, milliseconds) => { const id = setInterval(work, milliseconds); timers.add(id); return id; },
     onViewer: (listener) => { viewerListeners.add(listener); listeners.add(listener); if (me) listener(me); },
+    /** Runs `work` on these live changes and after a reconnect. */
+    onLive: (types, work) => { const run = coalesce(work); for (const type of [...types, 'resync']) unsubscribes.add(live.on(type, run)); return run; },
+    /** Polls every `offlineMs` while live updates are down; while they work, only every `onlineMs` as a safety net. */
+    poll: (work, offlineMs, onlineMs = 90_000) => {
+      let last = Date.now();
+      const id = setInterval(() => { if (document.hidden || (live.connected && Date.now() - last < onlineMs)) return; last = Date.now(); work(); }, offlineMs);
+      timers.add(id);
+      return id;
+    },
+    watchMatch: (code) => { live.watch(code); unsubscribes.add(() => live.watch(null)); },
     get active() { return !controller.signal.aborted; },
   };
   const hooks = pageMounts[document.documentElement.dataset.view]?.(page) || {};
-  currentPage = { navigate: hooks.navigate, destroy() { controller.abort(); timers.forEach(clearInterval); listeners.forEach((listener) => viewerListeners.delete(listener)); hooks.destroy?.(); } };
+  currentPage = { navigate: hooks.navigate, destroy() { controller.abort(); timers.forEach(clearInterval); listeners.forEach((listener) => viewerListeners.delete(listener)); unsubscribes.forEach((stop) => stop()); hooks.destroy?.(); } };
 }
 
 /* ---------- Routing ---------- */

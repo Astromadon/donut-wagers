@@ -26,6 +26,9 @@ Settings are read from the environment (`.env` locally). `lib/config.js` checks 
 | `ALERT_WEBHOOK_URL` | recommended | Discord webhook for errors; at most one message per 10 minutes |
 | `DONUTSMP_PAY_TAX_PERCENT` | no | DonutSMP's cut of each `/pay` (2). Deposits ask players to send extra; withdrawals show what arrives. Keep it equal to the bot's `DONUT_WAGERS_PAY_TAX_PERCENT` |
 | `MCPVP_ENABLED`, `MCPVP_API_URL`, `MCPVP_API_KEY`, `MCPVP_REFRESH_HOURS` | only after MCPVP approves | PvP tiers; see [TIERS.md](TIERS.md). Off by default |
+| `ANTHROPIC_API_KEY` | no | Turns on AI answers in AI Support. Server only. Without it the page offers help articles and Talk to a person; see [AI_SUPPORT.md](AI_SUPPORT.md) |
+| `SUPPORT_AI_MODEL`, `SUPPORT_AI_EFFORT`, `SUPPORT_AI_FALLBACKS` | no | Model (`claude-opus-5-5`), effort (`low`), and whether the API may fall back to another model when overloaded (on) |
+| `SUPPORT_AI_DAILY_BUDGET_USD`, `SUPPORT_AI_USER_DAILY_MESSAGES` | no | Estimated daily spend before AI answers pause (5), and questions per player per day (40) |
 | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, `DISCORD_TICKET_CATEGORY_ID`, `DISCORD_STAFF_ROLE_ID`, `DISCORD_ANNOUNCEMENT_CHANNEL_ID` | for tickets, bans, announcements | Discord bot |
 | `MICROSOFT_*`, `DONUT_SMP_API_*` | no | Off unless set |
 | `DISCORD_INVITE_URL`, `YOUTUBE_URL`, `X_URL`, `TIKTOK_URL` | no | Public links |

@@ -350,14 +350,14 @@ test('site switches: only the owner flips them, each part stops, nothing in prog
   const [owner, kestrel, rival] = [0, 3, 1].map(server.as);
   const flip = (key, enabled, who = owner) => who.post('/api/admin/features', { key, enabled });
   const { switches } = (await owner.get('/api/admin/features')).body;
-  assert.deepEqual(switches.map((item) => item.key), ['wagers', 'deposits', 'withdrawals', 'tournaments', 'snipes', 'chat', 'tickets', 'verification', 'signups']);
+  assert.deepEqual(switches.map((item) => item.key), ['wagers', 'deposits', 'withdrawals', 'tournaments', 'snipes', 'chat', 'tickets', 'verification', 'signups', 'aiSupport']);
   assert.ok(switches.every((item) => item.enabled));
   assert.equal((await flip('wagers', false, kestrel)).status, 403);
   assert.equal((await flip('everything', false)).status, 400);
   assert.equal((await flip('wagers', 'no')).status, 400);
   // A payout already queued must wait, not vanish.
   await kestrel.post('/api/wallet/withdrawals', { amount: 15e6 });
-  for (const key of ['wagers', 'deposits', 'withdrawals', 'tournaments', 'snipes', 'chat', 'tickets', 'verification']) assert.equal((await flip(key, false)).status, 200);
+  for (const key of ['wagers', 'deposits', 'withdrawals', 'tournaments', 'snipes', 'chat', 'tickets', 'verification', 'aiSupport']) assert.equal((await flip(key, false)).status, 200);
   const off = (await kestrel.get('/api/me')).body.features;
   assert.ok(Object.entries(off).filter(([key]) => key !== 'signups').every(([, value]) => value === false));
   const blocked = [['/api/matches', { ...TERMS, wager_amount: 1e6 }], ['/api/matches/code2aa/join'], ['/api/wallet/deposits', { amount: 1e6 }], ['/api/wallet/withdrawals', { amount: 15e6 }], ['/api/tournaments/t1/register'], ['/api/matches/code2aa/snipe'], ['/api/minecraft/verification/create', { minecraft_username: 'Someone' }]];
@@ -377,7 +377,7 @@ test('site switches: only the owner flips them, each part stops, nothing in prog
   assert.equal((await server.bot('/api/wallet/withdrawals/next')).status, 200, 'and go out once switched back on');
   assert.equal((await rival.post('/api/matches', { ...TERMS, wager_amount: 1e6 })).status, 201);
   const changes = server.stored().audit_logs.filter((entry) => entry.action === 'site_switch_changed');
-  assert.equal(changes.length, 10);
+  assert.equal(changes.length, 11);
   assert.deepEqual(changes[0].details, { switch: 'wagers', from: true, to: false });
   assert.equal(changes[0].user_id, 'u0');
 }));

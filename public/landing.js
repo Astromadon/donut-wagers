@@ -54,5 +54,7 @@ registerPage('home', (page) => {
     } catch (error) { if ($('.skeleton', box)) box.innerHTML = `<div class="home-empty"><span><b>Open matches didn’t load</b>${escapeHtml(error.message)}</span></div>`; }
   }
   loadHomeMatches();
-  page.interval(() => { if (!document.hidden) loadHomeMatches(); }, 20_000);
+  // Signed-in visitors get live lobby changes; everyone else (and a dropped stream) polls.
+  if (me) page.onLive(['lobby'], loadHomeMatches);
+  page.poll(loadHomeMatches, 20_000);
 });

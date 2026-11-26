@@ -25,6 +25,7 @@
       <tr><td>Balance, deposits, withdrawals, and payments we could not match to a deposit</td><td>To hold and pay the in-game currency you are owed</td></tr>
       <tr><td>Matches, results, reports, snipes, tournaments, favorites, and your featured match</td><td>To run matches, settle disputes, and show statistics</td></tr>
       <tr><td>Match chat messages</td><td>So opponents can talk and staff can review disputes</td></tr>
+      <tr><td>AI Support conversations, “Talk to a person” requests, and whether you marked an answer helpful. Text that looks like a password, code, token or email address is removed before it is stored</td><td>To answer your questions, hand them to staff when you ask, and see whether answers help</td></tr>
       <tr><td>Your PvP rankings for each kit from MCPVP, the name MCPVP lists for your account, and when they were last checked</td><td>To show tier badges. Only once this connection is switched on</td></tr>
       <tr><td>Security events: what was blocked, which account, how often, and when</td><td>To spot misuse. Kept 30 days, without IP addresses</td></tr>
       <tr><td>Age confirmation and any break you take</td><td>To apply the age limit and your break</td></tr>
@@ -42,6 +43,7 @@
     <li><b>Signed-in players:</b> your Discord ID, username and avatar, Minecraft name, tags, PvP tiers, rank, wins and losses, streaks, profit and losses, amounts played, tournament results, your settled matches without the opponent’s name, the match you feature, and when you joined.</li>
     <li><b>People with a match link:</b> both players’ names once the match has started or been cancelled.</li>
     <li><b>Your opponent and staff:</b> the match chat.</li>
+    <li><b>Only you:</b> your AI Support conversations. Staff see one only after you press “Talk to a person” in it.</li>
     <li><b>Staff:</b> what they need to handle disputes, payments, and bans. Your exact balance and your deposits and withdrawals are not shown to other players.</li>
   </ul>
 </section>
@@ -51,6 +53,7 @@
     <li><b>Discord</b> handles sign-in. If you contact staff about a match, we create a private Discord channel with the match link and your Discord and Minecraft names; the other player in the match is added to it. If you are banned here, your Discord ID and the reason may be sent to Discord to ban you from our server.</li>
     <li><b>Railway</b> hosts the website and its database.</li>
     <li><b>DonutSMP and Minecraft:</b> verification messages and payments happen in game through DonutWagersBot, so the server’s operators can see them.</li>
+    <li><b>Anthropic</b> provides the AI that answers AI Support questions, once it is switched on. It receives your question, earlier messages in that conversation, and, when the question is about your account, a short summary of your own balance, matches, or wallet activity. It does not receive your Discord ID or other players’ data.</li>
     <li><b>MCPVP:</b> once this connection is switched on, we look up your PvP rankings there with your Minecraft account ID, and check them again regularly.</li>
   </ul>
   <p>Your browser loads avatars from Discord, so Discord can see your IP address. Links to Discord, YouTube, X, and TikTok open those services only when you press them. We may also share information when the law requires it, or to protect players from fraud or harm.</p>
@@ -61,7 +64,7 @@
 </section>
 
 <section aria-labelledby="p-keep"><h2 id="p-keep">How long we keep it</h2>
-  <p>Account, match, and payment records stay while your account exists, because results and balances depend on them. Sessions end after 30 days or when you log out. Each match keeps its last 200 chat messages. Backups may hold older copies until they are replaced.</p>
+  <p>Account, match, and payment records stay while your account exists, because results and balances depend on them. Sessions end after 30 days or when you log out. Each match keeps its last 200 chat messages. AI Support conversations are deleted 30 days after your last message, or sooner if you delete them; one that staff are still answering is kept until they have answered it, and answered requests are deleted after 90 days. Backups may hold older copies until they are replaced.</p>
 </section>
 
 <section aria-labelledby="p-choices"><h2 id="p-choices">Your choices</h2>

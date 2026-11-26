@@ -90,6 +90,34 @@
           </section>
         </section>
 
+        <section id="support" class="view" aria-labelledby="support-title">
+          <div class="view-head"><div class="view-title"><span class="view-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#bot"/></svg></span><div><small>Help</small><h1 id="support-title">AI Support</h1></div></div>
+            <div class="support-head-actions"><button class="btn btn-small btn-quiet support-history-toggle" id="support-history-toggle" type="button" aria-expanded="false" aria-controls="support-history"><svg class="icon" aria-hidden="true"><use href="/icons.svg#history"/></svg>History</button><button class="btn btn-small" id="support-new" type="button"><svg class="icon" aria-hidden="true"><use href="/icons.svg#plus"/></svg>New conversation</button></div></div>
+          <div class="support-layout">
+            <aside class="support-history panel" id="support-history" aria-label="Your conversations"><h2>Conversations</h2><div id="support-list"></div><p class="support-retention" id="support-retention"></p></aside>
+            <section class="support-chat panel" aria-label="Conversation">
+              <div class="support-bar"><div><b id="support-chat-title">New conversation</b><span id="support-mode" class="tag"></span></div>
+                <div class="support-bar-actions"><button class="btn btn-small" id="support-escalate" type="button"><svg class="icon" aria-hidden="true"><use href="/icons.svg#headset"/></svg>Talk to a person</button><button class="btn btn-small btn-quiet btn-icon" id="support-delete" type="button" aria-label="Delete this conversation" data-tip="Delete" hidden><svg class="icon" aria-hidden="true"><use href="/icons.svg#trash"/></svg></button></div></div>
+              <div id="support-request" class="notice notice-good" role="status" hidden></div>
+              <div class="support-log" id="support-log" role="log" aria-live="polite" aria-relevant="additions text" tabindex="0" aria-label="Messages"></div>
+              <form class="support-composer" id="support-form" novalidate>
+                <label class="sr-only" for="support-input" id="support-input-label">Ask a question</label>
+                <textarea id="support-input" class="input" rows="1" maxlength="1500" placeholder="Ask about deposits, matches, verification…" autocomplete="off"></textarea>
+                <div class="support-composer-row"><small id="support-hint">Enter to send, Shift + Enter for a new line. Never share passwords or codes.</small><span id="support-count" class="num" aria-hidden="true"></span>
+                  <button class="btn btn-small btn-quiet" id="support-stop" type="button" hidden><svg class="icon" aria-hidden="true"><use href="/icons.svg#stop"/></svg>Stop</button>
+                  <button class="btn btn-small btn-primary" id="support-send" type="submit"><svg class="icon" aria-hidden="true"><use href="/icons.svg#send"/></svg><span>Send</span></button></div>
+              </form>
+            </section>
+          </div>
+        </section>
+
+  <dialog id="support-escalate-dialog" aria-labelledby="support-escalate-title"><form class="dialog-body" id="support-escalate-form" novalidate>
+    <div class="dialog-head"><div><h2 id="support-escalate-title">Talk to a person</h2><p>Staff see this conversation and your note in the admin panel, then reply to you on Discord.</p></div><button class="btn btn-quiet btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></div>
+    <label class="field"><span>What is it about?</span><select class="input" id="support-category" required></select></label>
+    <label class="field"><span>Anything staff should know <small class="muted">(optional)</small></span><textarea class="input" id="support-note" rows="4" maxlength="1000" placeholder="What happened, which match or payment, and when. No passwords or codes."></textarea></label>
+    <div class="dialog-actions"><button class="btn btn-quiet" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Send to staff</button></div>
+  </form></dialog>
+
 {{adminView}}
   <dialog id="match-dialog" class="dialog-wide create-dialog" aria-labelledby="match-dialog-title"><form id="match-form" novalidate>
     <div class="dialog-head dialog-bar"><span class="view-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#swords"/></svg></span><div><h2 id="match-dialog-title">Create Match</h2><p>1v1. Closes after 30 minutes if nobody joins.</p></div><button class="btn btn-quiet btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></div>

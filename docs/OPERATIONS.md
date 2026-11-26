@@ -28,9 +28,12 @@ $env:DONUTWAGERS_JSON_DATA_FILE = 'path\to\backup.json'; npm run import:postgres
 - Admin, Health: requests, errors, rate limits, bot status, and balance checks.
 - Logs are JSON lines with a request ID. The same ID is in the `X-Request-Id` response header.
 - `ALERT_WEBHOOK_URL`: server errors and database outages.
+- Admin, Support: open "Talk to a person" requests, AI usage and estimated cost per day. Admin, Health: live connections and how long each live check takes.
 - `npm run check:integrity` daily: negative or over-locked balances, entries locked without a match, duplicate links, accounts with no owner.
 
 ## Regular staff work
+
+- **Admin, Support:** read the conversation, reply to the player on Discord, then press Mark answered.
 
 - **Admin, Payments, withdrawals under review:** the bot could not confirm a payout. Check in game whether it arrived, then choose paid or refund. The site never sends one twice.
 - **Admin, Payments, unmatched payments:** money received with no matching deposit. Credit it or close it.
@@ -60,3 +63,15 @@ Local computer, one server, local PostgreSQL, 20 connections, 6 seconds each. A 
 Before the storage change the larger set managed 15 req/s on open matches and 2 writes per second.
 
 Limit: every write copies the whole data set in memory, so write speed falls as the history grows. Move finished matches to an archive before about 20,000 matches.
+
+## Live updates instead of polling
+
+Measured on a local computer with Microsoft Edge, one idle signed-in tab for 60 seconds (`/api/` requests only):
+
+| Page | Before (polling) | After (live updates) |
+| --- | --- | --- |
+| Matches | 24 per minute | 0 |
+| Wallet | 24 per minute | 0 |
+| Match room | 48 per minute | 4 (a safety check every 20 s) |
+
+Each server checks for changes every 2 seconds. With 10,000 matches and 2,000 players connected at once that check took about 12 ms (local computer). If the stream drops, pages go back to polling at the old rates until it reconnects (1 to 30 seconds, with jitter). A hosting proxy that closes long requests just causes a quick reconnect. After deploying, check that Admin, Health shows live connections while you have the site open.

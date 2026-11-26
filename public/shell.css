@@ -127,7 +127,13 @@ a.notification:hover { background: var(--panel-2); }
 [data-tip] { position: relative; }
 [data-tip]::after { content: attr(data-tip); position: absolute; top: calc(100% + 8px); left: 50%; z-index: 50; padding: 5px 9px; border: 1px solid var(--line-2); border-radius: 6px; background: #070707; color: var(--text); font-size: 12px; font-weight: 500; white-space: nowrap; visibility: hidden; opacity: 0; transform: translate(-50%, -3px); transition: opacity var(--fast), transform var(--fast), visibility var(--fast); pointer-events: none; }
 .balance { overflow: visible; }
-.balance-amount { border-radius: 7px 0 0 7px; } .balance-add { border-radius: 0 7px 7px 0; }
+.balance-amount { border-radius: 7px 0 0 7px; }
+/* A balance change is shown where the eye already is: the number counts to its new value and the box glows briefly. */
+.balance-amount.is-up { animation: balance-up .9s var(--ease); }
+.balance-amount.is-down { animation: balance-down .9s var(--ease); }
+@keyframes balance-up { from { background-color: var(--good-wash); color: var(--good); } }
+@keyframes balance-down { from { background-color: var(--bad-wash); color: var(--bad); } }
+@media (prefers-reduced-motion: reduce) { .balance-amount.is-up, .balance-amount.is-down { animation-duration: .6s !important; animation-name: balance-up !important; } .balance-amount.is-down { animation-name: balance-down !important; } } .balance-add { border-radius: 0 7px 7px 0; }
 @media (hover: hover) { [data-tip]:hover::after { visibility: visible; opacity: 1; transform: translate(-50%, 0); transition-delay: .25s; } }
 [data-tip]:focus-visible::after { visibility: visible; opacity: 1; transform: translate(-50%, 0); }
 [aria-expanded="true"][data-tip]::after { visibility: hidden; opacity: 0; }

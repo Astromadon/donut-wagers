@@ -12,6 +12,8 @@
 - **Rankings:** only from the server's MCPVP connection, tied to the account ID. Staff tags cannot look like a tier.
 - **Payments from the bot:** a transaction id is required, so a repeated report is never credited twice.
 - **Security events:** denied staff access, other players' matches, rejected verifications, account conflicts, bad bot secrets, cross-site requests, rate limits, and sign-ins that did not start here. Counted per kind, account, and hour, kept 30 days, no addresses. Admin, Security also lists one-sided match pairs and repeated disputes for review, and the full account and payment history.
+- **AI Support:** the API key stays on the server. The model sees only the public help articles, the player's question, and read-only summaries of that player's own account; it has no tool that changes anything. Input and output are cleaned of passwords, codes, tokens, and emails; answers are shown as text with a small formatting subset and links to this site only. Conversations belong to one account (others get 404), with per-player, per-server, and daily cost limits. Override attempts are logged. See [AI_SUPPORT.md](AI_SUPPORT.md).
+- **Live updates:** `/api/events` needs a valid session and checks it again every 2 seconds, so signing out or a ban ends the stream. Events carry no data, only "this changed"; pages then fetch through the normal, authorised API. A match channel is only for its players, staff, and open matches. At most 5 streams per player (the oldest is replaced), 5,000 per server; slow clients are dropped at 64 KB of backlog.
 - **Data:** players can export and delete their account. Logs hold no tokens, addresses, or query strings.
 
 ## Reporting a problem
@@ -20,7 +22,9 @@ Publish a contact for security reports before launch. There is none yet.
 
 ## Known risks
 
-- Rate limits are per server process and reset on restart.
+- Rate limits are per server process and reset on restart. AI Support daily counts are stored and shared.
+- The AI can still be wrong. Answers are limited to the help articles and say to talk to a person when unsure, but nothing guarantees an answer is correct. Prompt-injection filtering is a heuristic; the real protection is that the model has nothing it could misuse.
+- AI Support questions are sent to Anthropic once `ANTHROPIC_API_KEY` is set (stated in the privacy policy).
 - Age is self-confirmed. There is no regional restriction.
 - A player's results, profit, and settled matches (without the opponent's name) are visible to signed-in players in statistics.
 - Discord IDs are visible to signed-in players in search and statistics.

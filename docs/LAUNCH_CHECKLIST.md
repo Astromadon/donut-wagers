@@ -27,6 +27,9 @@
 - [ ] Safari, Firefox, a real phone, and a screen reader
 - [ ] Discord, YouTube, TikTok, and X links open the right pages
 - [ ] The bot reports the Minecraft account ID on every verification (renames need it)
+- [ ] Live updates: with the site open, Admin, Health shows live connections, and a deposit or match change appears without a reload behind the host's proxy
+- [ ] AI Support without a key: help articles and Talk to a person work; the request shows in Admin, Support
+- [ ] AI Support with a key (only after the owner approves the paid API): a monthly limit set in the Anthropic Console, then a few real questions checked for accuracy, including one about the asker's own balance
 
 ## Production
 

@@ -20,7 +20,11 @@ function routes(method) {
       for (const id of IDS) found.add(filled.replaceAll('[^/]+', id));
     }
   }
-  return [...found];
+  // Support routes live in lib/support-service.js. The live-updates stream never ends on purpose and is tested on its own.
+  const support = method === 'POST'
+    ? ['/api/support/conversations', ...IDS.flatMap((id) => [`/api/support/conversations/${id}/messages`, `/api/support/conversations/${id}/delete`, `/api/support/conversations/${id}/stop`, `/api/support/conversations/${id}/escalate`, `/api/support/conversations/${id}/messages/${id}/feedback`, `/api/admin/support/${id}/resolve`])]
+    : ['/api/support/status', '/api/support/articles', '/api/support/conversations', '/api/admin/support', ...IDS.map((id) => `/api/support/conversations/${id}`)];
+  return [...found, ...support].filter((route) => route !== '/api/events');
 }
 const FIELDS = ['amount', 'wager_amount', 'game_mode', 'rules', 'player', 'code', 'minecraftUsername', 'minecraft_username', 'minecraftUuid', 'transactionId', 'match_code', 'message', 'winner_id', 'confirm', 'favorite', 'days', 'title', 'tags', 'reason', 'duration_hours', 'name', 'region', 'format', 'max_players', 'winner_prize', 'success', 'outcome', 'paid', 'credit', 'enabled', 'protocol', 'botUsername', 'balance', 'locked_balance', 'tiers', 'tier', 'rankings', 'minecraft_verified', 'player_tags', 'is_admin', 'status', 'payout_amount'];
 const VALUES = [null, true, -1, 0, 1.5, 1e308, Number.MAX_SAFE_INTEGER + 1, '', ' ', 'NaN', 'Infinity', '-5m', '1e9', '9'.repeat(400), 'x'.repeat(5000), [], [[]], {}, { toString: 'x' }, { $gt: '' }, ['Owner', 'Admin'], '__proto__', '<img src=x onerror=alert(1)>', "'; DROP TABLE donut_wagers_records; --", '\u0000‮', '../../.env'];

@@ -2,7 +2,9 @@
   "name": "donut-wagers-auth",
   "version": "0.1.0",
   "private": true,
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node server.js",
     "test": "node --test test/*.test.js",
@@ -15,6 +17,7 @@
     "import:postgres": "node scripts/import-json-state-to-postgres.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.14.0",
     "pg": "^8.23.1"
   },
   "devDependencies": {

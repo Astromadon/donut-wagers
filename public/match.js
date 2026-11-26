@@ -239,8 +239,11 @@ registerPage('room', (page) => {
   });
 
   /* ---------- Start ---------- */
-  const poll = page.interval(() => { if (!document.hidden) loadMatch(); }, 3000);
-  page.on(document, 'visibilitychange', () => { if (!document.hidden && match) loadMatch(); });
+  // The room follows live changes to this match; polling every 3 s only runs while live updates are down.
+  page.watchMatch(matchCode);
+  page.onLive(['match', 'account'], () => loadMatch());
+  const poll = page.poll(() => loadMatch(), 3000, 20_000);
+  page.on(document, 'visibilitychange', () => { if (!document.hidden && match && !live.connected) loadMatch(); });
   loadMatch();
   // Arriving here usually follows creating or joining, which just locked an entry.
   refreshAccount();

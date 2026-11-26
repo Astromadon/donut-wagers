@@ -14,6 +14,8 @@ const { createObservability } = require('./lib/observability');
 const { checkIntegrity } = require('./lib/integrity');
 const { amountToSend, arrivingFrom, receiptMatches } = require('./lib/pay-tax');
 const { createSecurityEvents, suspiciousActivity, LABELS: SECURITY_LABELS } = require('./lib/security-events');
+const { createLiveHub } = require('./lib/live');
+const { createSupportService } = require('./lib/support-service');
 const { createMcpvpProvider, createTierSync, mergeResult, publicTiers, tierForKit, isAccountId } = require('./lib/tiers');
 
 loadEnvFile();
@@ -80,7 +82,7 @@ function loadEnvFile() {
 }
 
 function emptyDb() {
-  return { users: [], sessions: [], matches: [], tournaments: [], announcements: [], settings: { announcements_enabled: true }, minecraft_accounts: [], verification_codes: [], wagers: [], deposits: [], withdrawals: [], audit_logs: [], support_tickets: [], bans: [], unmatched_payments: [], security_events: [], bot_status: { last_heartbeat_at: null, bot_username: donutSmpService.botUsername } };
+  return { users: [], sessions: [], matches: [], tournaments: [], announcements: [], settings: { announcements_enabled: true }, minecraft_accounts: [], verification_codes: [], wagers: [], deposits: [], withdrawals: [], audit_logs: [], support_tickets: [], bans: [], unmatched_payments: [], security_events: [], support_conversations: [], support_requests: [], bot_status: { last_heartbeat_at: null, bot_username: donutSmpService.botUsername } };
 }
 function normalizeDb(db) {
   db ??= emptyDb();
@@ -101,6 +103,8 @@ function normalizeDb(db) {
   db.bans ??= [];
   db.unmatched_payments ??= [];
   db.security_events ??= [];
+  db.support_conversations ??= [];
+  db.support_requests ??= [];
   // Only a hash of each session token is stored, so a leaked database cannot be used to sign in.
   for (const session of db.sessions) if (!session.hashed) { session.id = hashToken(session.id); session.hashed = true; }
   db.bot_status ??= { last_heartbeat_at: null, bot_username: donutSmpService.botUsername };
@@ -503,7 +507,8 @@ async function sweepExpired() {
   const snapshot = await readDb();
   const due = snapshot.matches.some((match) => isMatchExpired(match, now) || isReadyExpired(match, now) || isReportOverdue(match, now))
     || snapshot.withdrawals.some((item) => item.status === 'processing' && new Date(item.claimed_at || 0).getTime() + WITHDRAWAL_CLAIM_MS <= now)
-    || snapshot.deposits.some((deposit) => deposit.kind === 'wallet' && deposit.status === 'pending' && new Date(deposit.expires_at).getTime() <= now);
+    || snapshot.deposits.some((deposit) => deposit.kind === 'wallet' && deposit.status === 'pending' && new Date(deposit.expires_at).getTime() <= now)
+    || supportService.due(snapshot, now);
   if (!due && !securityEvents.waiting()) return;
   await withEscrowMutation(async () => {
     const db = await readDb();
@@ -512,7 +517,8 @@ async function sweepExpired() {
     const matchesChanged = expireOpenMatches(db, now);
     const depositsChanged = expirePendingWalletDeposits(db, now);
     const withdrawalsChanged = expireClaimedWithdrawals(db, now);
-    if (matchesChanged || depositsChanged || withdrawalsChanged || eventsChanged) await writeDb(db);
+    const supportChanged = supportService.sweep(db, now);
+    if (matchesChanged || depositsChanged || withdrawalsChanged || eventsChanged || supportChanged) await writeDb(db);
   });
 }
 const MATCH_GAMES = ['Crystal PvP', 'Sword Duel'];
@@ -596,6 +602,7 @@ function notificationsFor(db, user) {
   }
   for (const deposit of db.deposits) if (deposit.kind === 'wallet' && deposit.user_id === user.id && deposit.status === 'verified') push(`deposit-${deposit.id}`, 'good', 'Deposit confirmed', `${money(deposit.amount).toLocaleString('en-US')} was added to your balance.`, deposit.verified_at, '/wallet');
   for (const withdrawal of db.withdrawals) if (withdrawal.user_id === user.id && withdrawal.completed_at) push(`withdrawal-${withdrawal.id}`, withdrawal.status === 'completed' ? 'good' : 'warn', withdrawal.status === 'completed' ? 'Withdrawal sent' : 'Withdrawal failed', withdrawal.status === 'completed' ? `${money(withdrawal.amount).toLocaleString('en-US')} was paid in game.` : 'Your balance was released.', withdrawal.completed_at, '/wallet');
+  for (const item of db.support_requests || []) if (item.user_id === user.id && item.status === 'resolved' && item.resolved_at) push(`support-${item.id}`, 'good', 'Support replied', item.staff_note || 'Staff have answered your request. Check your Discord messages.', item.resolved_at, '/support');
   return items.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 20);
 }
 /** Why this account may not stake or deposit right now, or null. Checked on the server for every attempt. */
@@ -609,6 +616,7 @@ const SWITCHES = {
   tickets: ['Contact staff', 'Creating Discord support tickets from match rooms.'],
   verification: ['Minecraft verification', 'Linking or renaming Minecraft accounts.'],
   signups: ['New accounts', 'First-time sign-ins. Existing players can still sign in.'],
+  aiSupport: ['AI Support answers', 'AI answers on the Support page. Help articles and “Talk to a person” keep working.'],
 };
 let liveSwitches = null;
 /** What is switched on right now. Every request reads the database first, so this is current. */
@@ -616,7 +624,7 @@ function siteFeatures(db = null) {
   if (db) liveSwitches = db.settings.features || {};
   return Object.fromEntries(Object.keys(SWITCHES).map((key) => [key, typeof liveSwitches?.[key] === 'boolean' ? liveSwitches[key] : CONFIG.features[key]]));
 }
-const SWITCHED_OFF = { wagers: 'Matchmaking is switched off right now.', deposits: 'Deposits are switched off right now.', withdrawals: 'Withdrawals are paused right now. Your balance is safe.', tournaments: 'Tournament sign-ups are switched off right now.', snipes: 'Snipes are switched off right now.', chat: 'Match chat is switched off right now.', tickets: 'Contacting staff from the site is switched off. Use the Discord server.', verification: 'Minecraft verification is switched off right now.', signups: 'New accounts are not being accepted right now.' };
+const SWITCHED_OFF = { wagers: 'Matchmaking is switched off right now.', deposits: 'Deposits are switched off right now.', withdrawals: 'Withdrawals are paused right now. Your balance is safe.', tournaments: 'Tournament sign-ups are switched off right now.', snipes: 'Snipes are switched off right now.', chat: 'Match chat is switched off right now.', tickets: 'Contacting staff from the site is switched off. Use the Discord server.', verification: 'Minecraft verification is switched off right now.', signups: 'New accounts are not being accepted right now.', aiSupport: 'AI answers are switched off right now. You can still talk to a person.' };
 function switchedOff(feature) { return siteFeatures()[feature] ? null : { status: 503, error: SWITCHED_OFF[feature], code: 'SWITCHED_OFF' }; }
 function participationBlock(user, feature) {
   if (!siteFeatures()[feature]) return { status: 503, error: SWITCHED_OFF[feature], code: 'SWITCHED_OFF' };
@@ -730,6 +738,74 @@ const tierSync = createTierSync({
     await writeDb(db);
   }),
 });
+/** Read-only summaries for AI Support. Always the signed-in player's own data, never anyone else's. */
+function supportAccountTools(db, userId, name) {
+  const user = db.users.find((item) => item.id === userId);
+  if (!user || user.deleted_at) return { error: 'Account not found.' };
+  const mine = (match) => [match.creator_id, match.opponent_id].includes(userId);
+  if (name === 'get_account_overview') return {
+    available_balance: availableBalance(user), locked_in_matches: money(user.locked_balance), snipes: Number(user.snipes || 0),
+    minecraft: user.minecraft_verified ? { verified: true, username: user.minecraft_username } : { verified: false },
+    age_confirmed: isAgeConfirmed(user), on_break_until: onBreak(user) ? user.break_until : null,
+    wins: Number(user.wins || 0), losses: Number(user.losses || 0),
+    open_or_active_matches: db.matches.filter((match) => mine(match) && [...OPEN_STATUSES, ...ACTIVE_STATUSES].includes(match.status)).length,
+  };
+  if (name === 'get_recent_matches') {
+    return {
+      matches: db.matches.filter(mine).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 5).map((match) => ({
+        code: matchCode(match), mode: match.game_mode, entry: money(match.wager_amount), status: match.status, created_at: match.created_at,
+        result: match.status === 'COMPLETED' ? (match.winner_id === userId ? 'won' : 'lost') : null, has_opponent: Boolean(match.opponent_id),
+      })),
+    };
+  }
+  if (name === 'get_wallet_activity') {
+    const pending = db.deposits.find((item) => item.user_id === userId && item.kind === 'wallet' && item.status === 'pending' && new Date(item.expires_at) > new Date());
+    const withdrawal = db.withdrawals.filter((item) => item.user_id === userId && ['pending', 'processing', 'review'].includes(item.status)).at(-1);
+    return {
+      pending_deposit: pending ? { amount: money(pending.amount), send_exactly: money(pending.send_amount ?? pending.amount), expires_at: pending.expires_at } : null,
+      withdrawal_in_progress: withdrawal ? { amount: money(withdrawal.amount), status: withdrawal.status, requested_at: withdrawal.created_at } : null,
+      recent: walletHistory(db, user).slice(0, 8).map(({ type, status, amount, created_at }) => ({ type, status, amount, created_at })),
+      limits: { deposit_minimum: 100_000, withdrawal_minimum: MIN_WITHDRAWAL_AMOUNT, pay_tax_percent: CONFIG.payTaxBps / 100 },
+    };
+  }
+  return { error: 'Unknown tool.' };
+}
+const supportService = createSupportService({
+  config: CONFIG.support, readDb, writeDb, withEscrowMutation, currentUser, readJson, sendJson, audit, securityEvents, siteFeatures, isStaff,
+  log: observability.log, accountTools: supportAccountTools, liveStatus: () => liveHub.status(),
+});
+/** What each signed-in viewer's pages show, reduced to short strings. A change means "fetch again". */
+function liveFingerprints(db, watched) {
+  const digest = (parts) => crypto.createHash('sha1').update(parts.join('|')).digest('base64url');
+  const parts = new Map([...watched.users].map((id) => [id, []]));
+  for (const user of db.users) {
+    const own = parts.get(user.id);
+    if (own) own.push(ledger(user.balance), money(user.locked_balance), user.snipes, user.minecraft_verified, user.minecraft_username, user.break_until, user.eligibility_confirmed_at, user.tiers?.synced_at, user.tiers?.error, (user.player_tags || []).join(','), user.featured_match_id);
+  }
+  const lobby = [];
+  const matches = new Map();
+  for (const match of db.matches) {
+    const state = `${match.id}:${match.status}:${match.opponent_id || ''}:${(match.ready_user_ids || []).length}:${Object.keys(match.result_submissions || {}).length}:${(match.cancellation_votes || []).length}:${match.winner_id || ''}`;
+    parts.get(match.creator_id)?.push(state);
+    if (match.opponent_id) parts.get(match.opponent_id)?.push(state);
+    if ([...OPEN_STATUSES, ...ACTIVE_STATUSES].includes(match.status)) lobby.push(state);
+    if (watched.matches.has(matchCode(match))) matches.set(matchCode(match), digest([state, (match.chat_messages || []).length, JSON.stringify(match.evidence || match.proof || []).length, match.ticket_channel_id || '', match.disputed_at || '']));
+  }
+  for (const item of [...db.deposits, ...db.withdrawals]) parts.get(item.user_id)?.push(`${item.id}:${item.status}`);
+  for (const item of db.support_requests) parts.get(item.user_id)?.push(`${item.id}:${item.status}`);
+  for (const tournament of db.tournaments) lobby.push(`${tournament.id}:${tournament.status}:${JSON.stringify(tournament.players || tournament.player_ids || []).length}`);
+  return { users: new Map([...parts].map(([id, list]) => [id, digest(list.map(String))])), lobby: digest(lobby), matches };
+}
+/** Match change hints go to the two players, staff, and anyone while the match is still open to join. */
+function canWatchMatch(user, match) { return isStaff(user) || [match.creator_id, match.opponent_id].includes(user.id) || OPEN_STATUSES.includes(match.status); }
+function liveSessionUser(db, sessionHash) {
+  const session = db.sessions.find((item) => item.id === sessionHash);
+  if (!session || new Date(session.expires_at) <= new Date()) return null;
+  const user = db.users.find((item) => item.id === session.user_id);
+  return user && !user.deleted_at && !activeBan(db, user.id) ? user.id : null;
+}
+// The hub reads outside any request, so it never sees one request's cached snapshot.
+const liveHub = createLiveHub({ readState: () => requestContext.run({ db: null }, () => readDb()), fingerprints: liveFingerprints, sessionUserId: liveSessionUser, log: observability.log });
 const syncTiers = () => { tierSync.tick().catch((error) => observability.log('error', 'tier_sync_error', { message: error.message })); };
 function tierCounts(db) {
   const counts = { ranked: 0, unranked: 0, pending: 0, unavailable: 0, no_account_id: 0, stale: 0 };
@@ -914,6 +990,7 @@ function exportAccount(db, user) {
     withdrawals: own(db.withdrawals),
     bans: own(db.bans).map((ban) => ({ reason: ban.reason, created_at: ban.created_at, expires_at: ban.expires_at, revoked_at: ban.revoked_at })),
     matches: db.matches.filter((match) => [match.creator_id, match.opponent_id].includes(user.id)).map((match) => ({ match_code: match.match_code, game_mode: match.game_mode, rules: match.rules, wager_amount: match.wager_amount, status: match.status, won: match.winner_id ? match.winner_id === user.id : null, created_at: match.created_at, settled_at: match.settled_at || null, messages: (match.chat_messages || []).filter((message) => message.user_id === user.id).map((message) => ({ body: message.body, created_at: message.created_at })) })),
+    ...supportService.exportFor(db, user.id),
     activity: own(db.audit_logs).map((entry) => ({ action: entry.action, details: entry.details, created_at: entry.created_at })),
   };
 }
@@ -938,6 +1015,7 @@ function deleteAccount(db, userId) {
   // An open payment still needs its name so that staff can return the money.
   for (const payment of db.unmatched_payments) if (payment.user_id === userId && payment.status !== 'open') payment.minecraft_username = null;
   db.security_events = db.security_events.filter((item) => item.user_id !== userId);
+  supportService.deleteFor(db, userId);
   for (const other of db.users) if (other.favorites?.includes(userId)) other.favorites = other.favorites.filter((id) => id !== userId);
   for (const match of db.matches) for (const message of match.chat_messages || []) if (message.user_id === userId) message.body = '[deleted]';
   for (const entry of db.audit_logs) if (entry.user_id === userId && entry.details?.minecraft_username) entry.details = { ...entry.details, minecraft_username: null, minecraft_uuid: null };
@@ -965,6 +1043,7 @@ const STATIC_FILES = {
   '/landing.js': 'application/javascript; charset=utf-8',
   '/dashboard.js': 'application/javascript; charset=utf-8',
   '/match.js': 'application/javascript; charset=utf-8',
+  '/support.js': 'application/javascript; charset=utf-8',
   '/items/snipe.png': 'image/png',
   '/items/end-crystal.png': 'image/png',
   '/items/diamond-sword.png': 'image/png',
@@ -976,7 +1055,7 @@ const STATIC_FILES = {
   '/dw-logo-128.png': 'image/png',
 };
 // Every page is the same shell (views/shell.html) around one content view.
-const APP_VIEWS = { '/matches': 'Matches', '/tournaments': 'Tournaments', '/leaderboard': 'Leaderboard', '/wallet': 'Wallet', '/profile': 'Profile settings', '/profile/matches': 'Match history', '/profile/transactions': 'Transactions', '/profile/connections': 'Connections', '/settings': 'Settings', '/admin': 'Admin' };
+const APP_VIEWS = { '/matches': 'Matches', '/tournaments': 'Tournaments', '/leaderboard': 'Leaderboard', '/wallet': 'Wallet', '/profile': 'Profile settings', '/profile/matches': 'Match history', '/profile/transactions': 'Transactions', '/profile/connections': 'Connections', '/settings': 'Settings', '/support': 'AI Support', '/admin': 'Admin' };
 // Sections the platform does not offer yet. Each page says so instead of pretending.
 const SOON_PAGES = {
   '/shop': ['Shop', 'bag', 'The shop isn’t open yet', 'Nothing is on sale. When it opens, purchases will use your DonutWagers balance.'],
@@ -1194,7 +1273,8 @@ const server = http.createServer((request, response) => {
   response.setHeader('X-Request-Id', id);
   applySecurityHeaders(response);
   if (request.method === 'HEAD') request.method = 'GET';
-  response.once('finish', () => observability.finish({ id, method: request.method, path: loggedPath, status: response.statusCode, ms: performance.now() - startedAt }));
+  // Streams stay open on purpose, so their duration says nothing about how fast the site is.
+  response.once('finish', () => observability.finish({ id, method: request.method, path: loggedPath, status: response.statusCode, ms: performance.now() - startedAt, stream: String(response.getHeader('Content-Type') || '').startsWith('text/event-stream') }));
   requestContext.run({ db: null }, () => handleRequest(request, response, id));
 });
 server.requestTimeout = 20_000;
@@ -1252,7 +1332,7 @@ async function handleRequest(request, response, requestId) {
       const user = await currentUser(request);
       const name = APP_VIEWS[url.pathname];
       const active = url.pathname.split('/')[1];
-      if (!user) return renderPage(response, 'gate', { active, title: `${name} | DonutWagers`, heading: `Log in to ${{ admin: 'open this page', leaderboard: 'see the leaderboard', matches: 'see matches', tournaments: 'see tournaments' }[active] || `open your ${active}`}`, next: safeNextPath(url.pathname + url.search) || '' });
+      if (!user) return renderPage(response, 'gate', { active, title: `${name} | DonutWagers`, heading: `Log in to ${{ admin: 'open this page', leaderboard: 'see the leaderboard', matches: 'see matches', tournaments: 'see tournaments', support: 'get support' }[active] || `open your ${active}`}`, next: safeNextPath(url.pathname + url.search) || '' });
       if (active === 'admin' && !isStaff(user)) return renderPage(response, 'not-found', { user, status: 404 });
       return renderPage(response, 'app', { user, active, title: `${active === 'admin' && name} | DonutWagers` });
     }
@@ -1263,6 +1343,26 @@ async function handleRequest(request, response, requestId) {
     if (request.method === 'GET' && /^\/matches\/[a-zA-Z0-9-]+$/.test(url.pathname)) {
       const user = await currentUser(request);
       return user ? renderPage(response, 'room', { user, active: 'matches' }) : renderPage(response, 'gate', { active: 'matches', title: 'Match room | DonutWagers', heading: 'Log in to open this match', next: safeNextPath(url.pathname) || '' });
+    }
+    if (request.method === 'GET' && url.pathname === '/api/events') {
+      const sessionToken = parseCookies(request).dw_session;
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      if (stopping) return sendJson(response, 503, { error: 'The server is restarting.' });
+      const code = url.searchParams.get('match');
+      let match = null;
+      if (code !== null) {
+        // A match channel is only for someone who may open that match room.
+        const found = /^[a-zA-Z0-9-]{1,64}$/.test(code) ? findMatch(await readDb(), code) : null;
+        if (!found || !canWatchMatch(user, found)) return sendJson(response, 404, { error: 'Match not found.' });
+        match = matchCode(found);
+      }
+      if (!liveHub.connect(request, response, { userId: user.id, sessionHash: hashToken(sessionToken), match })) return sendJson(response, 503, { error: 'Live updates are busy. The page will refresh on its own.' });
+      return;
+    }
+    if (url.pathname.startsWith('/api/support/') || url.pathname === '/api/admin/support' || url.pathname.startsWith('/api/admin/support/')) {
+      if (await supportService.handle(request, response, url)) return;
+      return sendJson(response, 404, { error: 'Not found.' });
     }
     if (request.method === 'GET' && url.pathname === '/api/players/search') {
       const user = await currentUser(request);
@@ -1758,7 +1858,7 @@ async function handleRequest(request, response, requestId) {
       const user = await currentUser(request);
       if (!requireAdmin(response, user)) return;
       const db = await readDb();
-      return sendJson(response, 200, { ...observability.snapshot(), bot: botStatus(db), features: siteFeatures(), tiers: { ...tierSync.status(), ...tierCounts(db) }, integrity_problems: checkIntegrity(db) });
+      return sendJson(response, 200, { ...observability.snapshot(), bot: botStatus(db), features: siteFeatures(), tiers: { ...tierSync.status(), ...tierCounts(db) }, live: liveHub.status(), integrity_problems: checkIntegrity(db) });
     }
     if (request.method === 'GET' && url.pathname === '/api/admin/features') {
       const user = await currentUser(request);
@@ -2656,6 +2756,8 @@ async function shutdown(signal) {
   observability.log('info', 'shutdown', { signal });
   const force = setTimeout(() => process.exit(1), 10_000);
   force.unref();
+  // Open streams would keep the server from closing; browsers reconnect to the next instance.
+  liveHub.closeAll();
   server.closeIdleConnections?.();
   await new Promise((resolve) => server.close(resolve));
   await escrowMutationQueue;
@@ -2682,4 +2784,4 @@ if (require.main === module) {
     process.exitCode = 1;
   });
 }
-module.exports = { createTournamentRound, settleMatch, tournamentStandings, publicTournament, staffRole, isOwner, isAdmin, isStaff, publicMatchForViewer, publicLobbyMatch, searchRegisteredPlayers, expireOpenMatches, parseMatchTerms, safeNextPath, leaderboardRows, notificationsFor, walletHistory, availableBalance, normalizeDb, emptyDb, expireClaimedWithdrawals, deleteAccount, exportAccount, participationBlock };
+module.exports = { liveFingerprints, createTournamentRound, settleMatch, tournamentStandings, publicTournament, staffRole, isOwner, isAdmin, isStaff, publicMatchForViewer, publicLobbyMatch, searchRegisteredPlayers, expireOpenMatches, parseMatchTerms, safeNextPath, leaderboardRows, notificationsFor, walletHistory, availableBalance, normalizeDb, emptyDb, expireClaimedWithdrawals, deleteAccount, exportAccount, participationBlock };

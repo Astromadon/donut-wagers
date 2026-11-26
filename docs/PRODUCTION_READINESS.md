@@ -84,3 +84,17 @@ The 66 is the intended `noindex` on private pages. There is no network distance 
 ## Not tested
 
 MCPVP access (no approved interface yet), Java bot build and behaviour, real Discord sign-in, tickets and bans, DonutSMP messages and payouts, hosting, real production data, Safari, Firefox, physical phones, screen readers, long soak, penetration testing, and whether the TikTok page exists.
+
+## Update, 25 November 2026: AI Support, live updates, motion
+
+Tested locally only. Not deployed.
+
+| Change | Verified by | Not verified |
+| --- | --- | --- |
+| AI Support page: chat with streaming, history, suggestions, topics, copy, retry, stop, helpful votes, Talk to a person, help-article search without a key | 5 API tests against a local API stand-in; 1 browser test with axe; screenshots at desktop and phone size | Real Claude answers: no API key was used, so answer quality is untested |
+| AI safety: server-only key, read-only tools bound to the signed-in player, input and output redaction, injection logging, ownership (404 for others), per-player, per-server, and daily cost limits, owner switch, 30-day retention, export and deletion | API tests above, fuzz test now covers support routes | Cost figures are estimates from list prices |
+| Live updates (server-sent events) replace polling while connected; reconnect with backoff and jitter, heartbeat, session re-check every 2 s, match channel permissions, 5 streams per player, slow-client cutoff, fallback polling | 1 API test, 2 browser tests; idle requests measured: 24/min to 0 on Matches and Wallet, 48/min to 4 in a match room | Behaviour behind Railway's proxy; many server instances (each checks the shared database, designed for it but untested) |
+| Motion: exits faster than entrances, new lobby cards stagger (capped), existing cards stay still, balance counts to its new value, reduced motion keeps short fades | 38 browser tests, axe at nine sizes, screenshots | Real devices, Safari, Firefox |
+| Admin, Support: AI status, spend, daily usage, requests with transcript and reply; Health shows live connections | Screenshot; API tests | |
+
+Test totals now: 64 API and unit tests (Postgres test skipped without a test database) and 38 browser tests, all passing; `npm audit` 0 vulnerabilities.

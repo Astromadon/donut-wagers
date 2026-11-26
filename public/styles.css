@@ -38,6 +38,12 @@
   --ease: cubic-bezier(.2, .7, .3, 1);
   --fast: .15s var(--ease);
   --medium: .18s var(--ease);
+  /* Leaving is quicker than arriving and accelerates away, so closed things never feel in the way. */
+  --ease-in: cubic-bezier(.4, 0, 1, 1);
+  --exit: .14s var(--ease-in);
+  /* New items in a list arrive one after another, but the whole run never takes longer than this. */
+  --stagger-step: 30ms;
+  --stagger-max: 8;
   --z-header: 20;
   --z-popover: 40;
   --z-drawer: 60;
@@ -305,10 +311,10 @@ select.input { appearance: none; padding-right: 36px; background: #050505 url("d
 
 /* Dialogs */
 
-dialog { width: min(480px, calc(100vw - 24px)); max-height: min(780px, calc(100dvh - 24px)); padding: 0; overflow: auto; border: 1px solid var(--line-2); border-radius: var(--radius-l); background: var(--panel); color: var(--text); box-shadow: var(--shadow); opacity: 0; transform: translateY(10px) scale(.98); transition: opacity .2s var(--ease), transform .2s var(--ease), overlay .2s allow-discrete, display .2s allow-discrete; }
-dialog::backdrop { background: rgba(0, 0, 0, 0); transition: background-color .2s var(--ease), overlay .2s allow-discrete, display .2s allow-discrete; }
-dialog[open] { opacity: 1; transform: none; }
-dialog[open]::backdrop { background: rgba(0, 0, 0, .76); }
+dialog { width: min(480px, calc(100vw - 24px)); max-height: min(780px, calc(100dvh - 24px)); padding: 0; overflow: auto; border: 1px solid var(--line-2); border-radius: var(--radius-l); background: var(--panel); color: var(--text); box-shadow: var(--shadow); opacity: 0; transform: translateY(10px) scale(.98); transition: opacity var(--exit), transform var(--exit), overlay .14s allow-discrete, display .14s allow-discrete; }
+dialog::backdrop { background: rgba(0, 0, 0, 0); transition: background-color var(--exit), overlay .14s allow-discrete, display .14s allow-discrete; }
+dialog[open] { opacity: 1; transform: none; transition: opacity .2s var(--ease), transform .2s var(--ease), overlay .2s allow-discrete, display .2s allow-discrete; }
+dialog[open]::backdrop { background: rgba(0, 0, 0, .76); transition: background-color .2s var(--ease), overlay .2s allow-discrete, display .2s allow-discrete; }
 @starting-style { dialog[open] { opacity: 0; transform: translateY(10px) scale(.98); } dialog[open]::backdrop { background: rgba(0, 0, 0, 0); } }
 .dialog-wide { width: min(680px, calc(100vw - 24px)); }
 .dialog-body { display: grid; gap: 18px; padding: 24px; }
@@ -379,9 +385,14 @@ dialog[open]::backdrop { background: rgba(0, 0, 0, .76); }
   .dialog-body { padding: 20px; }
   #toast { bottom: 92px; }
 }
+/* Reduced motion: nothing slides, scales or loops, but short fades stay so that changes are still noticed. */
+@keyframes fade-in { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
-  html { scroll-behavior: auto; }
-  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  html, * { scroll-behavior: auto !important; }
+  *, *::before, *::after { transition-property: opacity, color, background-color, border-color, box-shadow, outline-color, visibility, overlay, display !important; transition-duration: .12s !important; transition-delay: 0s !important; }
+  .page.is-entering, .tab-pane.is-entering, .match-card:not(.is-settled), .support-msg.is-new { animation: fade-in .12s linear both !important; }
+  .skeleton, .support-typing span { animation: none !important; }
+  .skeleton { background: var(--panel-2); }
 }
 
 .break-controls { display: flex; gap: 8px; align-items: center; }

@@ -52,7 +52,7 @@ test('every navigation link opens its page without reloading the frame', async (
   await signIn(0);
   await page.goto(server.base);
   await page.evaluate(() => { window.sameDocument = true; window.background = document.querySelector('.backdrop > div'); });
-  for (const [name, path] of [['matches', '/matches'], ['tournaments', '/tournaments'], ['leaderboard', '/leaderboard'], ['shop', '/shop'], ['gift-cards', '/gift-cards'], ['referrals', '/referrals'], ['profile', '/profile'], ['settings', '/settings'], ['admin', '/admin']]) {
+  for (const [name, path] of [['matches', '/matches'], ['tournaments', '/tournaments'], ['leaderboard', '/leaderboard'], ['shop', '/shop'], ['gift-cards', '/gift-cards'], ['referrals', '/referrals'], ['profile', '/profile'], ['support', '/support'], ['settings', '/settings'], ['admin', '/admin']]) {
     await page.locator(`.sidebar [data-nav="${name}"]`).click();
     await expect(page).toHaveURL(server.base + path);
     await expect(page.locator(`.sidebar [data-nav="${name}"]`)).toHaveAttribute('aria-current', 'page');
@@ -324,7 +324,7 @@ test.describe('PvP tiers', () => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await signIn(0);
     const found = [];
-    for (const path of ['/profile', '/matches', '/leaderboard', '/profile/matches', '/matches/code4aa', '/admin']) {
+    for (const path of ['/profile', '/matches', '/leaderboard', '/profile/matches', '/matches/code4aa', '/support', '/admin']) {
       await page.goto(server.base + path);
       await settle(page);
       if (path === '/matches') await page.getByRole('button', { name: /Ongoing/ }).click();
@@ -542,4 +542,39 @@ test('search engines see only public pages', async ({ page, server, signIn }) =>
   expect((await server.call('/robots.txt')).body).toContain('Disallow: /');
   expect((await server.call('/sitemap.xml')).body).toContain('<loc>');
   expect((await server.call('/og-image.png')).status).toBe(200);
+});
+
+test('AI Support without a key: help articles, a person, and no pretend answers', async ({ page, server, signIn }) => {
+  await signIn(3);
+  await page.goto(`${server.base}/support`);
+  await expect(page.locator('#support-mode')).toHaveText('Help articles');
+  await expect(page.locator('#support-log')).toContainText('AI answers are not switched on');
+  await page.getByRole('button', { name: 'Withdrawals' }).click();
+  await expect(page.locator('.support-article').first()).toContainText('15,000,000');
+  await page.locator('#support-input').fill('verify minecraft');
+  await page.locator('#support-input').press('Enter');
+  await expect(page.locator('.support-article').first()).toBeVisible();
+  await page.getByRole('button', { name: 'Talk to a person' }).click();
+  await page.locator('#support-category').selectOption('wallet');
+  await page.locator('#support-note').fill('Deposit from 5pm has not arrived.');
+  await page.getByRole('button', { name: 'Send to staff' }).click();
+  await expect(page.locator('#support-request')).toContainText('Staff have this conversation');
+  await expect(page.getByRole('button', { name: 'Talk to a person' })).toBeDisabled();
+  await expect(page.locator('#support-list .support-item')).toHaveCount(1);
+  const { violations } = await new AxeBuilder({ page }).include('#support').withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze();
+  expect(violations.map((v) => `${v.id} ${v.nodes[0].target}`)).toEqual([]);
+});
+
+test('live updates: a balance change appears without reloading or polling', async ({ page, server, signIn }) => {
+  await signIn(3);
+  await page.goto(`${server.base}/matches`);
+  await expect(page.locator('#balance')).toHaveText('188.5M');
+  await page.waitForTimeout(2600);
+  const polls = [];
+  page.on('request', (request) => { if (['/api/me', '/api/matches'].includes(new URL(request.url()).pathname)) polls.push(request.url()); });
+  server.edit((db) => { db.users.find((user) => user.id === 'u3').balance += 10_000_000; });
+  await expect(page.locator('#balance')).toHaveText('198.5M', { timeout: 8000 });
+  // Only the fetch the change asked for; no timed polling while the stream is up.
+  await page.waitForTimeout(16_000);
+  expect(polls.filter((url) => url.endsWith('/api/me')).length).toBeLessThanOrEqual(2);
 });

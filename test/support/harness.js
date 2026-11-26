@@ -18,7 +18,7 @@ async function startServer({ change = () => undefined, env = {}, port: fixedPort
   fs.writeFileSync(file, JSON.stringify(db));
   const port = fixedPort || await freePort();
   const child = spawn(process.execPath, ['--require', path.join(__dirname, 'discord-stub.js'), path.join(ROOT, 'server.js')], {
-    env: { ...process.env, PORT: String(port), APP_BASE_URL: `http://localhost:${port}`, DONUTWAGERS_DATA_FILE: file, DATABASE_URL: databaseUrl, NODE_ENV: 'test', DISCORD_CLIENT_SECRET: 'test', DONUT_WAGERS_ADMIN_DISCORD_ID: '900000000000000000', DONUT_WAGERS_BOT_WEBHOOK_SECRET: BOT_SECRET, DISCORD_BOT_TOKEN: '', RATE_LIMITS_ENABLED: 'false', FREEZE_READS: '1', ...env },
+    env: { ...process.env, ANTHROPIC_API_KEY: '', ANTHROPIC_AUTH_TOKEN: '', ANTHROPIC_BASE_URL: '', PORT: String(port), APP_BASE_URL: `http://localhost:${port}`, DONUTWAGERS_DATA_FILE: file, DATABASE_URL: databaseUrl, NODE_ENV: 'test', DISCORD_CLIENT_SECRET: 'test', DONUT_WAGERS_ADMIN_DISCORD_ID: '900000000000000000', DONUT_WAGERS_BOT_WEBHOOK_SECRET: BOT_SECRET, DISCORD_BOT_TOKEN: '', RATE_LIMITS_ENABLED: 'false', FREEZE_READS: '1', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';

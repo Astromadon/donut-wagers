@@ -6,12 +6,13 @@ registerPage('app', (page) => {
   const MIN_WITHDRAWAL = 15_000_000;
   const HISTORY_LABELS = { deposit: ['Deposit', 'deposit'], withdrawal: ['Withdrawal', 'withdraw'], match_won: ['Match won', 'trophy'], match_lost: ['Match lost', 'swords'], tournament_prize: ['Tournament prize', 'crown'] };
   const PROFILE_TABS = { overview: 'Profile settings', matches: 'Match history', transactions: 'Transactions', connections: 'Connections' };
-  const VIEWS = { matches: 'Matches', tournaments: 'Tournaments', leaderboard: 'Leaderboard', wallet: 'Wallet', profile: 'Profile settings', settings: 'Settings', admin: 'Admin' };
+  const VIEWS = { matches: 'Matches', tournaments: 'Tournaments', leaderboard: 'Leaderboard', wallet: 'Wallet', profile: 'Profile settings', settings: 'Settings', support: 'AI Support', admin: 'Admin' };
 
   let openMatches = null;
   let ongoingMatches = null;
   let myMatches = [];
   let currentView = 'matches';
+  const support = createSupportView(page);
   const filters = { status: 'available', mode: 'all', region: 'all', sort: 'newest' };
 
   /* ---------- Account data ---------- */
@@ -90,7 +91,7 @@ registerPage('app', (page) => {
     if (view !== 'wallet') stopWalletTimers();
     if (view === 'profile') showProfileTab();
     if (!entering) return 'inner';
-    ({ tournaments: () => loadTournaments(), leaderboard: loadLeaderboard, wallet: openWallet, admin: loadAdmin }[view])?.();
+    ({ tournaments: () => loadTournaments(), leaderboard: loadLeaderboard, wallet: openWallet, support: () => support.open(), admin: loadAdmin }[view])?.();
     return 'view';
   }
 
@@ -110,7 +111,7 @@ registerPage('app', (page) => {
   function openCard(match) {
     const code = escapeHtml(match.match_code || match.id);
     const sniped = match.snipe_profile;
-    return `<article class="match-card">${cardHead(match, match.is_creator ? '<span class="tag tag-gold">Yours</span>' : '')}${money(match)}
+    return `<article class="match-card" data-key="${code}">${cardHead(match, match.is_creator ? '<span class="tag tag-gold">Yours</span>' : '')}${money(match)}
       <div class="match-info"><div>${icon('flag')}${escapeHtml(matchTerms(match).label)}</div><div>${icon('clock')}<span data-expires="${escapeHtml(match.expires_at)}"></span></div></div>
       ${sniped ? `<div class="snipe-result">${snipeIcon}${tierBadge(match.creator_tier, { showEmpty: true })}<b>${escapeHtml(sniped.username)}</b><span class="num">${fullNumber(sniped.wins)}W ${fullNumber(sniped.losses)}L</span></div>` : ''}
       <footer>${match.is_creator ? `<a class="btn" href="${escapeHtml(matchHref(match))}">Open room</a>` : `<button class="btn btn-primary" type="button" data-join="${code}">Join match</button>${sniped || !me.features.snipes ? '' : `<button class="btn btn-icon" type="button" data-snipe="${code}" aria-label="Use a snipe to reveal this player" title="Use a snipe to reveal this player">${snipeIcon}</button>`}`}</footer></article>`;
@@ -118,7 +119,7 @@ registerPage('app', (page) => {
   function ongoingCard(match) {
     const hidden = 'Hidden until ready';
     const name = (value, tier) => (value === hidden ? '<span class="muted">Hidden</span>' : `<span class="versus-player">${tierBadge(tier)}<span>${escapeHtml(value || 'Waiting')}</span></span>`);
-    return `<article class="match-card">${cardHead(match, statusTag(match))}<div class="versus">${name(match.creator, match.creator_tier)}<i>vs</i>${name(match.opponent, match.opponent_tier)}</div>${money(match)}
+    return `<article class="match-card" data-key="${escapeHtml(match.match_code || match.id)}">${cardHead(match, statusTag(match))}<div class="versus">${name(match.creator, match.creator_tier)}<i>vs</i>${name(match.opponent, match.opponent_tier)}</div>${money(match)}
       <div class="match-info"><div>${icon('flag')}${escapeHtml(matchTerms(match).label)}</div></div>
       <footer><a class="btn ${match.viewer_is_participant ? 'btn-primary' : ''}" href="${escapeHtml(matchHref(match))}">${match.viewer_is_participant ? 'Go to your match' : 'View match'}</a></footer></article>`;
   }
@@ -139,7 +140,14 @@ registerPage('app', (page) => {
     else if (source.length) markup = emptyState('search', 'Nothing fits those filters', 'Try another mode or region.', '<button class="btn" type="button" data-clear-filters>Clear filters</button>');
     else markup = open ? lobbyEmpty() : emptyState('swords', 'No matches in progress', 'Live duels appear here once two players are in a room.');
     // Skipping identical markup keeps focus and hover stable between background refreshes.
-    if (markup !== lastMatchMarkup || $('#match-list .skeleton')) { $('#match-list').innerHTML = markup; lastMatchMarkup = markup; }
+    if (markup !== lastMatchMarkup || $('#match-list .skeleton')) {
+      const before = new Set($$('#match-list .match-card').map((card) => card.dataset.key));
+      $('#match-list').innerHTML = markup;
+      lastMatchMarkup = markup;
+      // Cards that were already there stay still; new ones arrive in a short, capped stagger.
+      let order = 0;
+      for (const card of $$('#match-list .match-card')) { if (before.has(card.dataset.key)) card.classList.add('is-settled'); else card.style.setProperty('--i', order++); }
+    }
     tickExpiry();
   }
   function tickExpiry() {
@@ -370,9 +378,11 @@ registerPage('app', (page) => {
   let walletTab = 'deposit';
   let walletTimer = null;
   let walletPoll = null;
+  // The wallet check that a live account change should run now instead of waiting for the next poll.
+  let walletCheck = null;
   let walletRequest = 0;
   let botOnline = false;
-  function stopWalletTimers() { clearInterval(walletTimer); clearInterval(walletPoll); walletTimer = walletPoll = null; walletRequest += 1; }
+  function stopWalletTimers() { clearInterval(walletTimer); clearInterval(walletPoll); walletTimer = walletPoll = walletCheck = null; walletRequest += 1; }
   async function openWallet() {
     stopWalletTimers();
     loadHistory();
@@ -450,7 +460,8 @@ registerPage('app', (page) => {
     };
     tick();
     walletTimer = page.interval(tick, 1000);
-    walletPoll = page.interval(check, 5000);
+    walletPoll = page.poll(check, 5000, 30_000);
+    walletCheck = check;
   }
   function withdrawForm() {
     stopWalletTimers();
@@ -477,7 +488,7 @@ registerPage('app', (page) => {
     else if (withdrawal.status === 'review') $('#wallet-content').innerHTML = `<div class="notice notice-warn">${icon('info')}<span><b>${amount}</b> to ${name} needs a staff check, because the bot could not confirm the payment. The amount stays reserved until they do. Contact staff on Discord if it takes long.</span></div>`;
     else {
       $('#wallet-content').innerHTML = `<h2>Sending ${amount}</h2><p class="muted">The bot is paying <b>${name}</b> in game. You can leave this page.</p><p class="waiting">${withdrawal.status === 'processing' ? 'Payment in progress' : 'Waiting for the bot'}</p>`;
-      walletPoll = page.interval(async () => {
+      walletCheck = async () => {
         const request = walletRequest;
         try {
           const current = (await api('/api/wallet/withdrawals/current')).withdrawal;
@@ -485,7 +496,8 @@ registerPage('app', (page) => {
           showWithdrawal(current);
           if (['completed', 'failed'].includes(current.status)) { loadHistory(); refreshAccount(); }
         } catch { /* The next check retries. */ }
-      }, 4000);
+      };
+      walletPoll = page.poll(walletCheck, 4000, 30_000);
     }
   }
   async function loadHistory() {
@@ -591,6 +603,7 @@ registerPage('app', (page) => {
     loadSecurity();
     loadAudit();
     loadHealth();
+    loadSupportQueue();
     loadTournaments(true);
     api('/api/announcements').then((result) => { $('#announcement-visible').checked = result.enabled !== false; }).catch(() => undefined);
   }
@@ -670,13 +683,43 @@ registerPage('app', (page) => {
   async function refreshTiers(button) {
     await withBusy(button, async () => { await post('/api/me/tiers/refresh'); toast('Checking your rankings. This can take a minute.'); await refreshViewer(); setTimeout(() => refreshViewer().catch(() => undefined), 5000); });
   }
+  /* ---------- Support queue and AI usage ---------- */
+  const dollars = (value) => `$${Number(value || 0).toFixed(Number(value || 0) < 1 ? 4 : 2)}`;
+  async function loadSupportQueue() {
+    const box = $('#admin-support');
+    if (!box) return;
+    try {
+      const data = await api('/api/admin/support');
+      const ai = data.ai;
+      $('#admin-support-count').textContent = data.open_requests || '';
+      const state = !ai.configured ? ['Not configured', 'Set ANTHROPIC_API_KEY on the server to turn on AI answers. Help articles and requests work without it.'] : !ai.enabled ? ['Switched off', 'Turn on “AI Support answers” in Site switches.'] : ['On', `Model ${ai.model}, effort ${ai.effort}.`];
+      const summary = [['AI answers', state[0]], ['Spent today', `${dollars(ai.spent_today_usd)} of ${dollars(ai.daily_budget_usd)}`], ['Last 30 days', dollars(ai.spent_30_days_usd)], ['Answering now', fullNumber(ai.streaming_now)], ['Per player per day', `${fullNumber(ai.user_daily_messages)} questions`], ['Since restart', `${fullNumber(ai.started)} started, ${fullNumber(ai.failed)} failed, ${fullNumber(ai.aborted)} stopped`]];
+      const usage = data.usage.length ? `<div class="table-wrap"><table class="admin-usage"><thead><tr><th>Day</th><th>Answers</th><th>Tokens in / out</th><th>Cost</th><th>Helpful / not</th><th>Escalated</th><th>Injection attempts</th><th>Errors</th></tr></thead><tbody>${data.usage.map((day) => `<tr><td>${escapeHtml(day.day)}</td><td class="num">${fullNumber(day.answers)}</td><td class="num">${fullNumber(day.input_tokens)} / ${fullNumber(day.output_tokens)}</td><td class="num">${dollars(day.cost_usd)}</td><td class="num">${fullNumber(day.helpful)} / ${fullNumber(day.unhelpful)}</td><td class="num">${fullNumber(day.escalations)}</td><td class="num">${fullNumber(day.injections)}</td><td class="num">${fullNumber(day.errors)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No AI usage recorded yet.</p>';
+      const transcript = (messages) => (messages.length ? messages.map((message) => `<div class="admin-transcript-line ${message.role === 'user' ? 'is-user' : ''}"><b>${message.role === 'user' ? 'Player' : 'AI'}</b><span>${escapeHtml(message.content || (message.status === 'error' ? '(no answer: error)' : ''))}</span></div>`).join('') : '<p class="muted">No messages, only the note.</p>');
+      const requests = data.requests.length ? data.requests.map((item) => `<article class="admin-row panel" data-support-request="${escapeHtml(item.id)}"><div>
+          <h3><span>${escapeHtml(item.player?.username || 'Deleted player')}</span><span class="tag ${item.status === 'open' ? 'tag-gold' : 'tag-good'}">${item.status === 'open' ? 'Waiting' : 'Answered'}</span><span class="tag">${escapeHtml(item.category)}</span></h3>
+          <p>${item.player?.minecraft_username ? `Minecraft ${escapeHtml(item.player.minecraft_username)} · ` : ''}Discord ID ${escapeHtml(item.player?.discord_id || '–')} · ${escapeHtml(timeAgo(item.created_at))}</p>
+          ${item.note ? `<p class="admin-support-note">${escapeHtml(item.note)}</p>` : ''}
+          <details class="admin-transcript"><summary>Conversation (${item.messages.length} messages)</summary>${transcript(item.messages)}</details>
+          ${item.staff_note ? `<p class="muted">Your reply: ${escapeHtml(item.staff_note)}</p>` : ''}</div>
+          ${item.status === 'open' ? `<form class="admin-support-resolve" data-resolve-support><label class="sr-only" for="support-reply-${escapeHtml(item.id)}">Short reply shown to the player</label><input id="support-reply-${escapeHtml(item.id)}" class="input" name="note" maxlength="1000" placeholder="Short reply shown on the site (optional)"><button class="btn btn-small btn-primary" type="submit">Mark answered</button></form>` : ''}</article>`).join('') : emptyState('check', 'No support requests', 'When a player presses “Talk to a person”, the request and conversation appear here.');
+      box.innerHTML = `<section class="panel panel-pad admin-support-summary"><h2>AI Support</h2><p class="muted">${escapeHtml(state[1])}</p><dl class="summary-list">${summary.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>${usage}</section><h2 class="admin-support-heading">Requests</h2><div class="admin-list">${requests}</div>`;
+    } catch (error) { box.innerHTML = `<div class="notice notice-bad">${icon('alert')}<span>${escapeHtml(error.message)}</span></div>`; }
+  }
+  page.on(document, 'submit', (event) => {
+    const form = event.target.closest('[data-resolve-support]');
+    if (!form) return;
+    event.preventDefault();
+    const id = form.closest('[data-support-request]').dataset.supportRequest;
+    withBusy($('button', form), async () => { await post(`/api/admin/support/${encodeURIComponent(id)}/resolve`, { note: form.elements.note.value }); toast('Marked as answered. The player sees your reply in notifications.'); await loadSupportQueue(); });
+  });
   async function loadHealth() {
     const box = $('#admin-health');
     try {
       const health = await api('/api/admin/metrics');
       const problems = health.integrity_problems;
       const on = (value) => (value ? 'On' : 'Off');
-      box.innerHTML = `<dl class="summary-list">${[['Bot', { ONLINE: 'Online', OFFLINE: 'Offline', OUTDATED: 'Outdated, payments blocked', NOT_CONFIGURED: 'Not configured' }[health.bot.status]], ['Wagers', on(health.features.wagers)], ['Deposits', on(health.features.deposits)], ['Withdrawals', on(health.features.withdrawals)], ['Server errors since start', fullNumber(health.counters.server_errors)], ['Slow requests (95th percentile)', health.latency_ms.p95 === null ? '–' : `${health.latency_ms.p95} ms`], ['Data problems', fullNumber(problems.length)], ...tierHealth(health.tiers)].map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>${problems.length ? `<div class="notice notice-bad">${icon('alert')}<ul>${problems.slice(0, 20).map((text) => `<li>${escapeHtml(text)}</li>`).join('')}</ul></div>` : ''}`;
+      box.innerHTML = `<dl class="summary-list">${[['Bot', { ONLINE: 'Online', OFFLINE: 'Offline', OUTDATED: 'Outdated, payments blocked', NOT_CONFIGURED: 'Not configured' }[health.bot.status]], ['Wagers', on(health.features.wagers)], ['Deposits', on(health.features.deposits)], ['Withdrawals', on(health.features.withdrawals)], ['Server errors since start', fullNumber(health.counters.server_errors)], ['Slow requests (95th percentile)', health.latency_ms.p95 === null ? '–' : `${health.latency_ms.p95} ms`], ['Data problems', fullNumber(problems.length)], ['Live connections', health.live ? `${fullNumber(health.live.connections)} tabs, ${fullNumber(health.live.users)} players` : '–'], ['Live check time', [null, undefined].includes(health.live?.last_tick_ms) ? '–' : `${health.live.last_tick_ms} ms`], ['Slow live clients dropped', fullNumber(health.live?.dropped_slow_clients || 0)], ...tierHealth(health.tiers)].map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>${problems.length ? `<div class="notice notice-bad">${icon('alert')}<ul>${problems.slice(0, 20).map((text) => `<li>${escapeHtml(text)}</li>`).join('')}</ul></div>` : ''}`;
     } catch (error) { box.innerHTML = `<div class="notice notice-bad">${icon('alert')}<span>${escapeHtml(error.message)}</span></div>`; }
   }
   function renderReviews() {
@@ -864,11 +907,14 @@ registerPage('app', (page) => {
   if (params.get('create') === '1') openCreate();
   refresh();
   loadRail();
-  page.interval(() => { if (!document.hidden) refresh(); }, 15_000);
-  page.on(document, 'visibilitychange', () => { if (!document.hidden) refresh(); });
+  // Live changes refresh the lobby straight away; the poll only runs while live updates are down.
+  page.onLive(['lobby'], () => Promise.all([refresh(), loadRail()]));
+  page.onLive(['account'], () => Promise.all([loadRail(), walletCheck?.(), currentView === 'support' && support.refresh()]));
+  page.poll(refresh, 15_000);
+  page.on(document, 'visibilitychange', () => { if (!document.hidden && !live.connected) refresh(); });
   return {
     /** Called first to ask whether this page shows the address, then with `go` to show it. */
     navigate(url, go) { if (!viewOf(url.pathname) || url.search) return false; return go ? showView() : true; },
-    destroy() { stopWalletTimers(); gameListeners.delete(applyGame); },
+    destroy() { stopWalletTimers(); gameListeners.delete(applyGame); support.destroy(); },
   };
 });
