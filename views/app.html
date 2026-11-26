@@ -22,12 +22,13 @@
         </section>
 
         <section id="leaderboard" class="view" aria-labelledby="leaderboard-title">
-          <div class="view-head"><div class="view-title"><span class="view-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#chart"/></svg></span><div><small>Compete</small><h1 id="leaderboard-title">Leaderboard</h1></div></div></div>
-          <div class="toolbar">
-            <div class="segmented" role="group" aria-label="Rank by"><button type="button" data-board-sort="wins" aria-pressed="true">Most wins</button><button type="button" data-board-sort="earned" aria-pressed="false">Top earnings</button></div>
-            <div class="segmented" role="group" aria-label="Period"><button type="button" data-board-period="week" aria-pressed="false">7 days</button><button type="button" data-board-period="month" aria-pressed="false">30 days</button><button type="button" data-board-period="all" aria-pressed="true">All time</button></div>
-          </div>
-          <div id="leaderboard-content"><div class="skeleton"></div></div>
+          <div class="view-head"><div class="view-title"><span class="view-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#chart"/></svg></span><div><small>Top players</small><h1 id="leaderboard-title">Leaderboard</h1></div></div>
+            <div class="board-filters">
+              <label class="sr-only" for="board-period">Period</label><select id="board-period" class="input"><option value="all">All time</option><option value="month">30 days</option><option value="week">7 days</option></select>
+              <div class="board-modes" role="group" aria-label="Game mode"><button type="button" data-board-mode="" aria-pressed="true" title="Both modes">All</button><button type="button" data-board-mode="crystal" aria-pressed="false" title="Crystal PvP" aria-label="Crystal PvP"><img src="/items/end-crystal.png" alt="" width="22" height="22"></button><button type="button" data-board-mode="sword" aria-pressed="false" title="Sword" aria-label="Sword"><img src="/items/diamond-sword.png" alt="" width="22" height="22"></button></div>
+            </div></div>
+          <div class="board-tabs" role="tablist" aria-label="Rank by"><button type="button" role="tab" data-board-sort="earned" aria-selected="true">Most Earned</button><button type="button" role="tab" data-board-sort="profit" aria-selected="false">Most Profit</button><button type="button" role="tab" data-board-sort="wins" aria-selected="false">Most Wins</button><button type="button" role="tab" data-board-sort="played" aria-selected="false">Most Played</button><span class="board-tab-indicator" aria-hidden="true"></span></div>
+          <div id="leaderboard-content" role="tabpanel" aria-label="Leaderboard"><div class="board-podium-skeleton skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
         </section>
 
         <section id="wallet" class="view" aria-labelledby="wallet-title">

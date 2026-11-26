@@ -324,7 +324,7 @@ test.describe('PvP tiers', () => {
     await page.keyboard.press('Escape');
     await expect(page.locator('#match-dialog')).toBeHidden();
     await page.goto(`${server.base}/leaderboard`);
-    await expect(page.locator('tr', { hasText: 'RivalTest' }).locator('.tier-badge')).toHaveText(['LT4']);
+    await expect(page.locator('.podium-spot, .board-row', { hasText: 'RivalTest' }).locator('.tier-badge')).toHaveText(['LT4']);
     await page.locator('#player-search-input').fill('slate');
     await expect(page.locator('#player-search-results .tier-badge')).toHaveAccessibleName(/may be out of date/);
     await page.locator('#player-search-results [data-player]').click();
@@ -454,7 +454,7 @@ test('failures: offline, server error, unknown match, unknown page', async ({ pa
 test('empty states are shown when there is nothing yet', async ({ browser, server, signIn, page }) => {
   server.edit((db) => { Object.assign(db, { matches: [], wagers: [], tournaments: [], announcements: [], deposits: [], withdrawals: [] }); for (const user of db.users) { user.locked_balance = 0; } });
   await signIn(3);
-  for (const [path, text] of [['/matches', 'No open matches'], ['/tournaments', 'No tournaments yet'], ['/leaderboard', 'Nobody has settled a match yet'], ['/profile/matches', 'No matches yet'], ['/profile/transactions', 'No transactions yet']]) {
+  for (const [path, text] of [['/matches', 'No open matches'], ['/tournaments', 'No tournaments yet'], ['/leaderboard', 'Nobody here yet'], ['/profile/matches', 'No matches yet'], ['/profile/transactions', 'No transactions yet']]) {
     await page.goto(server.base + path);
     await expect(page.getByText(text)).toBeVisible();
   }

@@ -399,24 +399,83 @@ registerPage('app', (page) => {
   document.addEventListener('statistics-changed', () => { if (location.pathname === '/profile/matches') renderProfileMatches(); });
 
   /* ---------- Leaderboard ---------- */
-  const board = { sort: 'wins', period: 'all' };
+  const board = { sort: 'earned', period: 'all', mode: '' };
+  try { Object.assign(board, JSON.parse(sessionStorage.getItem('board-filters') || '{}')); } catch { /* Storage is optional. */ }
+  const BOARD_LABELS = { earned: 'Earned', profit: 'Profit', wins: 'Wins', played: 'Played' };
   let boardRequest = 0;
+  let boardController = null;
+  /** Discord avatar, else the Minecraft head, else the first letter. */
+  const boardAvatar = (row, size) => (row.avatar_url ? `<img src="${escapeHtml(row.avatar_url)}" alt="" width="${size}" height="${size}" loading="lazy" data-head>` : row.minecraft_uuid ? `<img src="/heads/${escapeHtml(row.minecraft_uuid.replaceAll('-', ''))}.png" alt="" width="${size}" height="${size}" loading="lazy" data-head>` : '') + `<span class="head-initial" aria-hidden="true">${escapeHtml(row.username.slice(0, 1).toUpperCase())}</span>`;
+  function boardValue(row) {
+    if (board.sort === 'wins') return [`${fullNumber(row.wins)}`, `${fullNumber(row.wins)} win${row.wins === 1 ? '' : 's'}`, ''];
+    if (board.sort === 'played') return [`${fullNumber(row.played)}`, `${fullNumber(row.played)} match${row.played === 1 ? '' : 'es'}`, ''];
+    const value = board.sort === 'profit' ? row.profit : row.earned;
+    return [`${value > 0 ? '+' : value < 0 ? '−' : ''}${fullNumber(Math.abs(value))}`, `${value < 0 ? 'minus ' : ''}${fullNumber(Math.abs(value))}`, value > 0 ? 'is-up' : value < 0 ? 'is-down' : ''];
+  }
+  const coinIcon = () => (['earned', 'profit'].includes(board.sort) ? '<span class="board-coin" aria-hidden="true"></span>' : '');
+  function podiumCard(row, place) {
+    const [value, spoken, tone] = boardValue(row);
+    return `<li class="podium-spot is-${place}" style="--i:${place === 1 ? 0 : place === 2 ? 1 : 2}">
+      ${place === 1 ? '<span class="podium-crown" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5z" fill="currentColor"/></svg></span>' : ''}
+      <button class="podium-avatar" type="button" data-player="${escapeHtml(row.discord_id)}" tabindex="-1" aria-hidden="true">${boardAvatar(row, place === 1 ? 104 : 76)}<b class="podium-rank" aria-hidden="true">${place}</b></button>
+      <button class="podium-name" type="button" data-player="${escapeHtml(row.discord_id)}">${escapeHtml(row.username)}<span class="sr-only">, rank ${place}</span></button>
+      ${siteTierBadges(row.tiers)}
+      <div class="podium-box"><small>${BOARD_LABELS[board.sort]}</small><b class="num ${tone}" aria-label="${escapeHtml(spoken)}">${coinIcon()}${escapeHtml(value)}</b></div>
+      <span class="podium-pedestal" aria-hidden="true"></span>
+    </li>`;
+  }
+  function boardRow(row) {
+    const [value, spoken, tone] = boardValue(row);
+    return `<li class="board-row${row.is_viewer ? ' is-viewer' : ''}"><b class="board-rank num">${row.rank}</b><span class="board-avatar head">${boardAvatar(row, 40)}</span>
+      <div class="board-player"><button class="board-name" type="button" data-player="${escapeHtml(row.discord_id)}">${escapeHtml(row.username)}${row.is_viewer ? ' <span class="player-you">You</span>' : ''}</button>${siteTierBadges(row.tiers)}</div>
+      <div class="board-value"><small>${BOARD_LABELS[board.sort]}</small><b class="num ${tone}" aria-label="${escapeHtml(spoken)}">${coinIcon()}${escapeHtml(value)}</b></div>
+      <button class="btn btn-small board-stats" type="button" data-player="${escapeHtml(row.discord_id)}" aria-label="Stats for ${escapeHtml(row.username)}">Stats${icon('right')}</button></li>`;
+  }
+  function syncBoardControls() {
+    $$('[data-board-sort]').forEach((button, index) => { const on = button.dataset.boardSort === board.sort; button.setAttribute('aria-selected', String(on)); button.tabIndex = on ? 0 : -1; if (on) $('.board-tab-indicator').style.setProperty('--tab', index); });
+    setPressed($$('[data-board-mode]'), $(`[data-board-mode="${board.mode}"]`));
+    $('#board-period').value = board.period;
+    try { sessionStorage.setItem('board-filters', JSON.stringify(board)); } catch { /* Storage is optional. */ }
+  }
   async function loadLeaderboard() {
     const request = ++boardRequest;
     const box = $('#leaderboard-content');
+    syncBoardControls();
+    // A newer choice cancels the request for the old one.
+    boardController?.abort();
+    boardController = new AbortController();
+    box.classList.add('is-loading');
     try {
-      const { players, viewer } = await api(`/api/leaderboard?sort=${board.sort}&period=${board.period}`);
+      const response = await fetch(`/api/leaderboard?sort=${board.sort}&period=${board.period}${board.mode ? `&mode=${board.mode}` : ''}`, { signal: boardController.signal });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw Object.assign(new Error(data.error || 'The leaderboard didn’t load.'), { status: response.status });
       if (request !== boardRequest) return;
-      if (!players.length) { box.innerHTML = emptyState('trophy', 'Nobody has settled a match yet', board.period === 'all' ? 'The first winner takes the top spot.' : 'Try a longer period.', '<a class="btn btn-primary" href="/matches">Browse matches</a>'); return; }
-      const score = (row) => (board.sort === 'wins' ? `<strong class="num">${fullNumber(row.wins)}</strong> ${row.wins === 1 ? 'win' : 'wins'}` : `<strong class="num">${shortAmount(row.earned)}</strong> won`);
-      const podium = players.slice(0, 3).map((row, index) => `<button class="panel ${index ? '' : 'first'}" type="button" data-player="${escapeHtml(row.discord_id)}">${avatar(row)}<b>${index + 1}. ${escapeHtml(row.username)}</b>${siteTierBadges(row.tiers, { interactive: false })}<span class="score">${score(row)}</span></button>`).join('');
-      const rowHtml = (row) => `<tr class="${row.is_viewer ? 'is-viewer' : ''}"><td class="num">${row.rank}</td><td><button class="player-cell" type="button" data-player="${escapeHtml(row.discord_id)}">${avatar(row)}<span>${escapeHtml(row.username)}${row.is_viewer ? ' (you)' : ''}</span>${siteTierBadges(row.tiers, { interactive: false })}</button></td><td class="right num">${row.wins}–${row.losses}</td><td class="right num col-optional">${Math.round((row.wins / (row.wins + row.losses || 1)) * 100)}%</td><td class="right num">${shortAmount(row.earned)}</td></tr>`;
-      const below = viewer && viewer.rank > players.length ? rowHtml(viewer) : '';
-      box.innerHTML = `<div class="podium">${podium}</div><div class="panel table-wrap"><table><thead><tr><th>Rank</th><th>Player</th><th class="right">Record</th><th class="right col-optional">Win rate</th><th class="right">Winnings</th></tr></thead><tbody>${players.map(rowHtml).join('')}${below}</tbody></table></div>${viewer ? '' : '<p class="field-hint" style="margin-top:14px">You’ll be ranked once you settle a match in this period.</p>'}`;
-    } catch (error) { if (request === boardRequest) box.innerHTML = emptyState('alert', 'The leaderboard didn’t load', error.message); }
+      const { players, viewer } = data;
+      if (!players.length) { box.innerHTML = emptyState('trophy', 'Nobody here yet', board.period === 'all' ? 'Settled matches put players on the board.' : 'Try a longer period or another mode.', '<a class="btn btn-primary" href="/matches">Browse matches</a>'); return; }
+      const [first, second, third] = players;
+      const podium = [second && podiumCard(second, 2), podiumCard(first, 1), third && podiumCard(third, 3)].filter(Boolean).join('');
+      const rest = players.slice(3);
+      const below = viewer && viewer.rank > players.length ? `<li class="board-gap" aria-hidden="true">…</li>${boardRow(viewer)}` : '';
+      box.innerHTML = `<section class="board-podium" aria-label="Top three"><ol>${podium}</ol></section>
+        ${rest.length || below ? `<ol class="board-rows" start="4">${rest.map(boardRow).join('')}${below}</ol>` : ''}`;
+    } catch (error) {
+      if (error.name === 'AbortError' || request !== boardRequest) return;
+      if (handleAuthError(error)) return;
+      box.innerHTML = emptyState('alert', 'The leaderboard didn’t load', error.message, '<button class="btn" type="button" data-board-retry>Try again</button>');
+    } finally { if (request === boardRequest) box.classList.remove('is-loading'); }
   }
-  $$('[data-board-sort]').forEach((button) => button.addEventListener('click', () => { board.sort = button.dataset.boardSort; setPressed($$('[data-board-sort]'), button); loadLeaderboard(); }));
-  $$('[data-board-period]').forEach((button) => button.addEventListener('click', () => { board.period = button.dataset.boardPeriod; setPressed($$('[data-board-period]'), button); loadLeaderboard(); }));
+  $$('[data-board-sort]').forEach((button) => button.addEventListener('click', () => { if (board.sort === button.dataset.boardSort) return; board.sort = button.dataset.boardSort; loadLeaderboard(); }));
+  $('.board-tabs').addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    const tabs = $$('[data-board-sort]');
+    const next = tabs[(tabs.findIndex((tab) => tab.dataset.boardSort === board.sort) + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+    board.sort = next.dataset.boardSort;
+    next.focus();
+    loadLeaderboard();
+  });
+  $$('[data-board-mode]').forEach((button) => button.addEventListener('click', () => { board.mode = button.dataset.boardMode; loadLeaderboard(); }));
+  $('#board-period').addEventListener('change', (event) => { board.period = event.target.value; loadLeaderboard(); });
+  page.on(document, 'click', (event) => { if (event.target.closest('[data-board-retry]')) loadLeaderboard(); });
 
   /* ---------- Wallet ---------- */
   let walletTab = 'deposit';

@@ -614,31 +614,51 @@ function parseMatchTerms(gameMode, rules) {
   if (lead >= Number.parseInt(parsed[1], 10)) return { error: 'The round lead must be smaller than the first-to target.' };
   return { game_mode: `${game} · 1v1 · ${region}`, rules: `First to ${parsed[1]}, lead ${lead}` };
 }
-function leaderboardRows(db, period) {
+/**
+ * Leaderboard rows from settled matches and paid tournament prizes. The records are the truth; the board is
+ * a cached view of them (vault: "Ordered stores are indexes; the profile is the truth"), so it is rebuilt
+ * at most every 30 seconds or when the data changes, never on every request.
+ */
+const BOARD_SORTS = ['earned', 'profit', 'wins', 'played'];
+const boardCache = new Map();
+function leaderboardRows(db, period, mode = null) {
+  // Any settlement, ban or new account changes the key, so changes show at once; otherwise 30 s.
+  const key = `${period}:${mode || 'all'}:${db.matches.length}:${db.matches.filter((match) => match.status === 'COMPLETED').length}:${db.tournaments.length}:${db.bans.length}:${db.users.length}`;
+  const cached = boardCache.get(key);
+  if (cached && Date.now() - cached.at < 30_000) return cached.rows;
   const windowMs = { week: 7, month: 30 }[period] * 86_400_000;
   const since = Number.isFinite(windowMs) ? Date.now() - windowMs : 0;
   const rows = new Map();
   const row = (id) => {
-    if (!rows.has(id)) rows.set(id, { user_id: id, wins: 0, losses: 0, earned: 0 });
+    if (!rows.has(id)) rows.set(id, { user_id: id, wins: 0, losses: 0, earned: 0, lost: 0 });
     return rows.get(id);
   };
   for (const match of db.matches) {
     if (match.status !== 'COMPLETED' || !match.winner_id || new Date(match.settled_at || match.created_at).getTime() < since) continue;
+    if (mode && modeOf(match) !== mode) continue;
     const loserId = match.winner_id === match.creator_id ? match.opponent_id : match.creator_id;
     const winner = row(match.winner_id);
     winner.wins += 1;
     winner.earned += Math.max(0, money(match.payout_amount) - money(match.wager_amount));
-    row(loserId).losses += 1;
+    const loser = row(loserId);
+    loser.losses += 1;
+    loser.lost += money(match.wager_amount);
   }
-  for (const tournament of db.tournaments) {
-    if (!tournament.winner_id || !tournament.prize_paid_at || new Date(tournament.prize_paid_at).getTime() < since) continue;
-    row(tournament.winner_id).earned += money(tournament.winner_prize);
+  if (!mode) {
+    for (const tournament of db.tournaments) {
+      if (!tournament.winner_id || !tournament.prize_paid_at || new Date(tournament.prize_paid_at).getTime() < since) continue;
+      row(tournament.winner_id).earned += money(tournament.winner_prize);
+    }
   }
-  return [...rows.values()].flatMap((entry) => {
+  const result = [...rows.values()].flatMap((entry) => {
     const user = db.users.find((candidate) => candidate.id === entry.user_id);
+    // Deleted and banned accounts never appear on a public board.
     if (!user || user.deleted_at || activeBan(db, user.id)) return [];
-    return [{ ...entry, discord_id: user.discord_id, username: user.discord_username, avatar_url: avatarUrl(user), tags: playerTags(user), tiers: siteTiers(user), minecraft_username: user.minecraft_verified ? user.minecraft_username : null }];
+    return [{ ...entry, profit: entry.earned - entry.lost, played: entry.wins + entry.losses, discord_id: user.discord_id, username: user.discord_username, avatar_url: avatarUrl(user), minecraft_uuid: user.minecraft_verified ? user.minecraft_uuid || null : null, tags: playerTags(user), tiers: siteTiers(user), minecraft_username: user.minecraft_verified ? user.minecraft_username : null }];
   });
+  if (boardCache.size > 50) boardCache.clear();
+  boardCache.set(key, { at: Date.now(), rows: result });
+  return result;
 }
 function walletHistory(db, user) {
   const entries = [];
@@ -814,6 +834,8 @@ const referralChecks = (db) => ({ enabled: () => siteFeatures().referrals, banne
 /** Runs a qualification and writes its audit entry. */
 function auditReferral(db, referral, status) {
   if (status) audit(db, referral.referrer_id, `referral_${status}`, { referred_user_id: referral.referred_id, reason: referral.decision_reason || referral.flags?.join('; ') || null });
+  // A reused or own Minecraft account is worth a look in Admin, Security; it is not a punishment.
+  if (status === 'rejected' && referral.decided_by === 'system') securityEvents.record('referral_rejected', referral.referrer_id);
 }
 /** One-time and repeatable housekeeping: identity history, referral records, and waiting referrals. */
 async function reconcileReferrals() {
@@ -999,7 +1021,7 @@ function playerStatistics(db, user, { mode = null, own = false } = {}) {
   const played = sum(paid, (match) => money(match.wager_amount));
   const profit = sum(paid, (match) => matchProfit(match, user.id));
   const prizes = db.tournaments.filter((tournament) => tournament.winner_id === user.id && tournament.prize_paid_at && (!mode || modeOf(tournament) === mode));
-  const ranking = leaderboardRows(db, 'all').sort((a, b) => b.wins - a.wins || a.losses - b.losses || b.earned - a.earned || a.username.localeCompare(b.username));
+  const ranking = [...leaderboardRows(db, 'all')].sort((a, b) => b.wins - a.wins || a.losses - b.losses || b.earned - a.earned || a.username.localeCompare(b.username));
   const everyWin = settledMatchesFor(db, user.id).filter((match) => canFeature(match, user.id));
   const featured = everyWin.find((match) => match.id === user.featured_match_id);
   const biggest = own ? everyWin.reduce((top, match) => (!top || matchProfit(match, user.id) > matchProfit(top, user.id) ? match : top), null) : null;
@@ -1468,7 +1490,10 @@ async function handleRequest(request, response, requestId) {
       return user ? renderPage(response, 'room', { user, active: 'matches' }) : renderPage(response, 'gate', { active: 'matches', title: 'Match room | DonutWagers', heading: 'Log in to open this match', next: safeNextPath(url.pathname) || '' });
     }
     if (request.method === 'GET' && /^\/heads\/[0-9a-fA-F-]{32,36}\.png$/.test(url.pathname)) {
-      const body = await skinHeads.get(url.pathname.slice(7, -4));
+      // Only accounts verified here, so the server is never a free relay for any account ID someone types.
+      const requested = url.pathname.slice(7, -4).replaceAll('-', '').toLowerCase();
+      const known = (await readDb()).minecraft_identities.some((item) => item.id === requested);
+      const body = known ? await skinHeads.get(requested) : null;
       // No head to show: an empty answer, which the page replaces with the player's initial.
       if (!body) { response.writeHead(204, { 'Cache-Control': 'public, max-age=600' }); return response.end(); }
       response.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=43200', 'Content-Length': body.length });
@@ -1707,12 +1732,19 @@ async function handleRequest(request, response, requestId) {
       const user = await currentUser(request);
       if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
       const period = ['week', 'month'].includes(url.searchParams.get('period')) ? url.searchParams.get('period') : 'all';
-      const byWins = url.searchParams.get('sort') !== 'earned';
-      const rows = leaderboardRows(await readDb(), period).sort((a, b) => (byWins
-        ? b.wins - a.wins || a.losses - b.losses || b.earned - a.earned
-        : b.earned - a.earned || b.wins - a.wins) || a.username.localeCompare(b.username))
-        .map((entry, index) => ({ ...entry, rank: index + 1, is_viewer: entry.user_id === user.id }));
-      return sendJson(response, 200, { period, players: rows.slice(0, 50), viewer: rows.find((entry) => entry.is_viewer) || null, total: rows.length });
+      const sort = BOARD_SORTS.includes(url.searchParams.get('sort')) ? url.searchParams.get('sort') : 'earned';
+      const mode = STATISTICS_MODES.includes(url.searchParams.get('mode')) ? url.searchParams.get('mode') : null;
+      const order = {
+        earned: (a, b) => b.earned - a.earned || b.wins - a.wins,
+        profit: (a, b) => b.profit - a.profit || b.wins - a.wins,
+        wins: (a, b) => b.wins - a.wins || a.losses - b.losses || b.earned - a.earned,
+        played: (a, b) => b.played - a.played || b.wins - a.wins,
+      }[sort];
+      // Players with nothing in this column are left off rather than listed with zero.
+      const counted = (entry) => (sort === 'profit' ? entry.played > 0 : entry[sort] > 0);
+      const rows = leaderboardRows(await readDb(), period, mode).filter(counted).sort((a, b) => order(a, b) || a.username.localeCompare(b.username))
+        .map((entry, index) => ({ ...entry, user_id: undefined, rank: index + 1, is_viewer: entry.user_id === user.id }));
+      return sendJson(response, 200, { period, sort, mode, players: rows.slice(0, 50), viewer: rows.find((entry) => entry.is_viewer) || null, total: rows.length });
     }
     if (request.method === 'POST' && url.pathname === '/api/me/eligibility') {
       const user = await currentUser(request);

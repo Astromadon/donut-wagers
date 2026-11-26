@@ -121,3 +121,29 @@ Referral links and a 1,000,000 reward per invited player who verifies Minecraft 
 ## Update, 26 November 2026: referral system rebuilt
 
 The one-per-invite reward was replaced by milestone rewards (1 = 5 snipes, 3 = 5M, 5 = 10M, 10 = 30M) for friends who complete in-game Minecraft verification with a never-used account ID, a page based on the owner's reference, an Enable Referral System toggle, and an admin review queue with reasons. Verified by 8 API tests (including eight simultaneous claims) and 1 browser test; 79 API/unit and 41 browser tests pass in total. Not deployed. Open: legal review of referral incentives; players verified without an account ID must verify again to count or claim.
+
+## Update, 26 November 2026: leaderboard redesign and security pass
+
+**Leaderboard** rebuilt from the owner's reference:
+- Most Earned, Most Profit, Most Wins and Most Played tabs, with Crystal and Sword mode buttons and a period choice;
+- a podium with crown, rank badges and gold, silver and bronze pedestals;
+- ranked rows with Stats buttons.
+
+It is cached for 30 seconds, and any settlement, ban or new account refreshes it at once. Banned and deleted players are never shown, internal ids are not sent, and parameters are allow-listed. Covered by 1 API test and the browser and accessibility suites.
+
+**Security pass.** Every route that changes data (49) was listed and checked against the vault's checklists (Economy Exploits, Server Authority and Validation, Exploits and Anti-Cheat, Trading Systems Without Duplication):
+- authentication and ownership;
+- the state check and the change it guards sitting in one locked transaction;
+- whole, finite, in-range numbers;
+- idempotent retries;
+- rate limits.
+
+Money paths re-read in full: deposits, withdrawals, bot reports, admin balance and snipe tools, tournament prizes, Minecraft unlinking, rematch, and referral claims. No way to create or duplicate currency was found. Two fixes:
+- the skin head proxy now serves only Minecraft accounts verified on DonutWagers, so it can't be used as an open relay;
+- auto-rejected referrals (reused or own Minecraft accounts) are now security events in Admin → Security.
+
+Remaining risks, not bugs:
+- people who own several real Minecraft accounts can still use them for referral milestones or free tournaments; owner review is the backstop;
+- rate limits are per server process.
+
+80 API and unit tests and 41 browser tests pass.
