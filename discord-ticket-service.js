@@ -7,7 +7,8 @@ class DiscordTicketServiceError extends Error {
 }
 
 class DiscordTicketService {
-  constructor({ botToken, guildId, categoryId, staffRoleId, ownerId, announcementChannelId }) {
+  constructor({ botToken, guildId, categoryId, staffRoleId, ownerId, announcementChannelId, apiBase }) {
+    this.apiBase = String(apiBase || 'https://discord.com/api/v10').replace(/\/+$/, '');
     this.botToken = botToken;
     this.guildId = guildId;
     this.categoryId = categoryId || null;
@@ -22,7 +23,7 @@ class DiscordTicketService {
   }
 
   async request(path, options = {}) {
-    const response = await fetch(`https://discord.com/api/v10${path}`, {
+    const response = await fetch(`${this.apiBase}${path}`, {
       ...options,
       signal: AbortSignal.timeout(10_000),
       headers: {
@@ -108,6 +109,16 @@ class DiscordTicketService {
       method: 'PUT',
       headers: { 'X-Audit-Log-Reason': encodeURIComponent(`DonutWagers ban: ${String(reason || 'No reason').slice(0, 350)}`) },
       body: JSON.stringify({ delete_message_seconds: 0 }),
+    });
+  }
+
+  /** Gives a server member a role. Discord answers 204, and giving a role they already have changes nothing. */
+  async addMemberRole(discordId, roleId, reason) {
+    if (!this.isConfigured()) throw new DiscordTicketServiceError('Discord roles are not configured.', 503);
+    if (!/^\d{17,20}$/.test(String(discordId || '')) || !/^\d{17,20}$/.test(String(roleId || ''))) throw new DiscordTicketServiceError('Invalid Discord user or role ID.', 400);
+    await this.request(`/guilds/${this.guildId}/members/${encodeURIComponent(discordId)}/roles/${encodeURIComponent(roleId)}`, {
+      method: 'PUT',
+      headers: { 'X-Audit-Log-Reason': encodeURIComponent(String(reason || 'DonutWagers').slice(0, 350)) },
     });
   }
 

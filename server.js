@@ -73,7 +73,11 @@ const discordTicketService = new DiscordTicketService({
   staffRoleId: process.env.DISCORD_STAFF_ROLE_ID,
   ownerId: ADMIN_DISCORD_ID,
   announcementChannelId: process.env.DISCORD_ANNOUNCEMENT_CHANNEL_ID,
+  // Only tests point this elsewhere; production always talks to discord.com.
+  apiBase: process.env.NODE_ENV === 'test' ? process.env.DISCORD_API_BASE_URL : undefined,
 });
+// The Discord role every tournament winner gets. Set DISCORD_TOURNAMENT_WINNER_ROLE_ID to an empty value to turn it off.
+const TOURNAMENT_WINNER_ROLE_ID = String(process.env.DISCORD_TOURNAMENT_WINNER_ROLE_ID ?? '1543719308562137291').trim();
 
 function loadEnvFile() {
   try {
@@ -153,7 +157,62 @@ async function readDb() {
   siteFeatures(db);
   return db;
 }
+function winnerRoleDue(tournament, at = Date.now()) {
+  const state = tournament.winner_role || {};
+  return tournament.status === 'COMPLETED' && Boolean(tournament.winner_id) && !state.granted_at && !state.gave_up_at && (!state.retry_at || Date.parse(state.retry_at) <= at);
+}
+/**
+ * Gives each tournament winner the winner role in the Discord server, after the result is saved.
+ * Runs outside the locked transaction, records the outcome on the tournament, and retries with backoff
+ * (Discord down, rate limited, or the winner not in the server yet) for about three days.
+ */
+let winnerRoleRun = null;
+let winnerRoleAgain = false;
+let winnerRolePending = false;
+function scheduleWinnerRoles() {
+  if (!/^\d{17,20}$/.test(TOURNAMENT_WINNER_ROLE_ID) || !discordTicketService.isConfigured()) return;
+  if (winnerRoleRun) { winnerRoleAgain = true; return; }
+  winnerRoleRun = requestContext.exit(() => grantWinnerRoles())
+    .catch((error) => observability.log('error', 'winner_role_failed', { message: error.message }))
+    .finally(() => { winnerRoleRun = null; if (winnerRoleAgain) { winnerRoleAgain = false; scheduleWinnerRoles(); } });
+}
+async function grantWinnerRoles() {
+  const due = (await readDb()).tournaments.filter((tournament) => winnerRoleDue(tournament)).map((tournament) => tournament.id);
+  for (const tournamentId of due) {
+    const snapshot = await readDb();
+    const tournament = snapshot.tournaments.find((item) => item.id === tournamentId);
+    if (!tournament || !winnerRoleDue(tournament)) continue;
+    const winner = snapshot.users.find((user) => user.id === tournament.winner_id);
+    const attempts = Number(tournament.winner_role?.attempts || 0) + 1;
+    let result;
+    if (!/^\d{17,20}$/.test(String(winner?.discord_id || ''))) result = { gave_up_at: new Date().toISOString(), error: 'no_discord_account' };
+    else {
+      try {
+        await discordTicketService.addMemberRole(winner.discord_id, TOURNAMENT_WINNER_ROLE_ID, `Won the DonutWagers tournament ${String(tournament.name || '').slice(0, 100)}`);
+        result = { granted_at: new Date().toISOString() };
+      } catch (error) {
+        const status = error instanceof DiscordTicketServiceError ? error.status : undefined;
+        // 404: not in the server (yet). 403: the bot lacks Manage Roles or sits below the role.
+        const reason = status === 404 ? 'not_in_server' : status === 403 ? 'missing_permission' : status ? `discord_${status}` : 'unreachable';
+        observability.log('error', 'winner_role_failed', { status, attempts });
+        result = attempts >= 12
+          ? { gave_up_at: new Date().toISOString(), error: reason }
+          : { retry_at: new Date(Date.now() + Math.min(6 * 3_600_000, 60_000 * 2 ** (attempts - 1))).toISOString(), error: reason };
+      }
+    }
+    await withEscrowMutation(async () => {
+      const db = await readDb();
+      const stored = db.tournaments.find((item) => item.id === tournamentId);
+      if (!stored || stored.winner_id !== tournament.winner_id || stored.winner_role?.granted_at) return;
+      stored.winner_role = { role_id: TOURNAMENT_WINNER_ROLE_ID, user_id: tournament.winner_id, attempts, ...result };
+      if (result.granted_at) audit(db, null, 'tournament_winner_role_granted', { tournament_id: tournamentId, winner_id: tournament.winner_id, role_id: TOURNAMENT_WINNER_ROLE_ID });
+      await writeDb(db);
+    });
+  }
+}
 async function writeDb(db) {
+  // Sent once the transaction has committed (see withEscrowMutation), so the grant reads the saved result.
+  if (db.tournaments?.some((tournament) => winnerRoleDue(tournament))) winnerRolePending = true;
   if (postgresStore) return postgresStore.write(db);
   await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
   // Write to a sibling file and rename it so a reader never sees half a file.
@@ -175,10 +234,11 @@ function withEscrowMutation(operation) {
   const context = requestContext.getStore();
   const work = () => requestContext.run({ mutating: true }, operation);
   if (context) context.db = null;
-  if (postgresStore) return postgresStore.transaction(work);
+  const afterCommit = (result) => { if (winnerRolePending) { winnerRolePending = false; setImmediate(scheduleWinnerRoles); } return result; };
+  if (postgresStore) return postgresStore.transaction(work).then(afterCommit);
   const pending = escrowMutationQueue.then(work, work);
   escrowMutationQueue = pending.catch(() => undefined);
-  return pending;
+  return pending.then(afterCommit);
 }
 function parseCookies(request) {
   return Object.fromEntries((request.headers.cookie || '').split(';').filter(Boolean).map((item) => {
@@ -3267,6 +3327,8 @@ async function startServer() {
   await reconcileReferrals().catch((error) => observability.log('error', 'referral_reconcile_failed', { message: error.message }));
   setInterval(() => sweepExpired().catch((error) => observability.log('error', 'sweep_failed', { message: error.message })), 30_000).unref();
   setInterval(() => rateLimiter.prune(), 60_000).unref();
+  scheduleWinnerRoles();
+  setInterval(scheduleWinnerRoles, 60_000).unref();
   if (tierProvider.enabled) { setInterval(syncTiers, 60_000).unref(); tierProvider.loadModes().catch(() => undefined); }
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));

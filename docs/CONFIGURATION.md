@@ -32,6 +32,7 @@ Settings are read from the environment (`.env` locally). `lib/config.js` checks 
 | `SUPPORT_AI_MODEL`, `SUPPORT_AI_EFFORT`, `SUPPORT_AI_FALLBACKS` | no | Model (`claude-opus-5-5`), effort (`low`), and whether the API may fall back to another model when overloaded (on) |
 | `SUPPORT_AI_DAILY_BUDGET_USD`, `SUPPORT_AI_USER_DAILY_MESSAGES` | no | Estimated daily spend before AI answers pause (5), and questions per player per day (40) |
 | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, `DISCORD_TICKET_CATEGORY_ID`, `DISCORD_STAFF_ROLE_ID`, `DISCORD_ANNOUNCEMENT_CHANNEL_ID` | for tickets, bans, announcements | Discord bot |
+| `DISCORD_TOURNAMENT_WINNER_ROLE_ID` | no, default `1543719308562137291` | Discord role given to each tournament winner once the result is saved. The bot needs **Manage Roles** and its own role must be above this one. Retried with backoff for about three days (Discord down, or the winner not in the server yet); the outcome is stored on the tournament as `winner_role`. Set it empty to turn it off |
 | `MICROSOFT_*`, `DONUT_SMP_API_*` | no | Off unless set |
 | `DISCORD_INVITE_URL`, `YOUTUBE_URL`, `X_URL`, `TIKTOK_URL` | no | Public links |
 | `DONUTWAGERS_DATA_FILE`, `FREEZE_READS`, `TEST_DATABASE_URL`, `E2E_CHANNEL` | never | Local development and tests |
