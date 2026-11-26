@@ -98,3 +98,18 @@ Tested locally only. Not deployed.
 | Admin, Support: AI status, spend, daily usage, requests with transcript and reply; Health shows live connections | Screenshot; API tests | |
 
 Test totals now: 64 API and unit tests (Postgres test skipped without a test database) and 38 browser tests, all passing; `npm audit` 0 vulnerabilities.
+
+## Update, 26 November 2026: MCTiers, match page redesign, match history
+
+Tested locally only. Not deployed.
+
+| Change | Verified by | Not verified |
+| --- | --- | --- |
+| MCPVP provider replaced by the public MCTiers v2 API: schema checks, shared requests, 1 s spacing, backoff, stale fallback, retired and peak tiers, gamemode titles from `/mode/list`, per-gamemode badges (Crystal PvP = MCTiers Vanilla) | 15 tier tests against a local stand-in in the documented schema; one manual run against the real API (ranked, retired and unknown players) | MCTiers' terms of use for this purpose; behaviour under their real load limits (none documented) |
+| Match page rebuilt to the reference layout: header, setting cards, timeline, player cards with skin heads and tiers, game rules tabs, match chat with system events, spectator mode, collapsible chat | 9 API tests, 2 new browser tests, axe at nine sizes, screenshots at 1440, 1920, tablet and phone compared with the reference | Real devices, Safari, Firefox |
+| Match events, tier and name snapshots, agreed scores, rematch, spectator limits, profile history with paging and filters, completed-match search | API tests including a simultaneous rematch race and integrity checks | PostgreSQL run (the test is skipped without a test database); data is stored inside existing records, so no schema change |
+| Lobby: Completed tab, player search, remembered filters, names that open profiles | Browser test | |
+
+Test totals now: 73 API and unit tests (Postgres test skipped without a test database) and 40 browser tests, all passing.
+
+Needs review before launch: the drafted rules in `lib/match-rules.js` (disconnect, forfeit, allowed and banned mods), MCTiers' terms, and mc-heads.net as a third party (listed in the privacy policy).

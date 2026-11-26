@@ -132,14 +132,18 @@ function tagStyle(tag) {
   return ['staff', 'admin', 'helper'].includes(name) ? 'staff' : '';
 }
 /* PvP tiers. A badge always shows one kit's ranking from the server, never a guess. */
-const KIT_GLYPHS = { sword: 'sword', crystal: 'crystal', shield: 'shield', mace: 'mace', spear: 'spear', uhc: 'heart', smp: 'pearl', 'diamond-smp': 'armor', pot: 'pot', 'netherite-pot': 'pot', 'early-game': 'armor', 'late-game': 'armor', 'end-game': 'crystal', creeper: 'creeper', cart: 'cart', bow: 'bow' };
+const KIT_GLYPHS = { vanilla: 'crystal', axe: 'axe', nethop: 'pot', sword: 'sword', crystal: 'crystal', shield: 'shield', mace: 'mace', spear: 'spear', uhc: 'heart', smp: 'pearl', 'diamond-smp': 'armor', pot: 'pot', 'netherite-pot': 'pot', 'early-game': 'armor', 'late-game': 'armor', 'end-game': 'crystal', creeper: 'creeper', cart: 'cart', bow: 'bow' };
 const TIER_STATES = { unranked: 'Unranked', pending: 'Waiting for the first check', unavailable: 'Ranking unavailable right now', no_account_id: 'Ranking unavailable until Minecraft is verified again', not_verified: 'Minecraft not verified' };
 const tierDate = (value) => (value ? new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '');
 /** Lines for the tooltip and for screen readers: kit, full tier, source, last successful check. */
 function tierLines(tier) {
-  const lines = [tier.label, tier.tier ? `${tier.name}${tier.retired ? ', retired' : ''}` : TIER_STATES[tier.status] || 'Unranked'];
-  if (tier.source) lines.push(`Source: ${tier.source}`);
-  if (tier.synced_at) lines.push(`Last synced ${tierDate(tier.synced_at)}${tier.stale ? ', may be out of date' : ''}`);
+  const lines = [tier.label, tier.tier ? `${tier.retired ? 'Retired, peak ' : ''}${tier.name}` : TIER_STATES[tier.status] || 'Unranked'];
+  if (tier.tier && tier.peak && !tier.retired && tier.peak !== tier.tier) lines.push(`Peak: ${tier.peak_name || tier.peak}`);
+  if (tier.historical) lines.push(`Tier when this match was played${tier.recorded_at ? `, ${tierDate(tier.recorded_at)}` : ''}`);
+  else {
+    if (tier.source) lines.push(`Source: ${tier.source}`);
+    if (tier.synced_at) lines.push(`Last synced ${tierDate(tier.synced_at)}${tier.stale ? ', may be out of date' : ''}`);
+  }
   return lines;
 }
 /** interactive: false inside buttons and links, where a second focus stop is not allowed. */
@@ -147,22 +151,58 @@ function tierBadge(tier, { interactive = true, showEmpty = false } = {}) {
   if (!tier || (!tier.tier && !showEmpty)) return '';
   const [, band = '', number = ''] = /^([A-Z]+)(\d+)$/.exec(tier.tier || '') || [];
   const lines = tierLines(tier);
-  const text = tier.tier || (tier.status === 'unranked' ? 'Unranked' : 'N/A');
-  return `<span class="tier-badge${tier.stale && tier.tier ? ' is-stale' : ''}${tier.retired ? ' is-retired' : ''}${tier.tier ? '' : ' is-empty'}" role="img" aria-label="${escapeHtml(lines.join('. '))}" data-tier-tip="${escapeHtml(lines.join('\n'))}" data-band="${escapeHtml(band)}" data-number="${escapeHtml(number)}" data-kit="${escapeHtml(tier.kit)}"${interactive ? ' tabindex="0"' : ''}><i><svg aria-hidden="true"><use href="/icons.svg#kit-${KIT_GLYPHS[tier.kit] || 'other'}"/></svg></i><em aria-hidden="true">${escapeHtml(text)}</em></span>`;
+  const text = tier.tier ? `${tier.retired ? 'R' : ''}${tier.tier}` : (tier.status === 'unranked' ? 'Unranked' : 'N/A');
+  return `<span class="tier-badge${tier.stale && tier.tier ? ' is-stale' : ''}${tier.retired ? ' is-retired' : ''}${tier.historical ? ' is-historical' : ''}${tier.tier ? '' : ' is-empty'}" role="img" aria-label="${escapeHtml(lines.join('. '))}" data-tier-tip="${escapeHtml(lines.join('\n'))}" data-band="${escapeHtml(band)}" data-number="${escapeHtml(number)}" data-kit="${escapeHtml(tier.kit)}"${interactive ? ' tabindex="0"' : ''}><i><svg aria-hidden="true"><use href="/icons.svg#kit-${KIT_GLYPHS[tier.kit] || 'other'}"/></svg></i><em aria-hidden="true">${escapeHtml(text)}</em></span>`;
 }
 /** The kits played on this site, for lists that are not about one match. */
 function siteTierBadges(tiers, options) {
-  const badges = (tiers?.rankings || []).filter((item) => ['crystal', 'sword'].includes(item.kit)).map((item) => tierBadge(item, options)).join('');
+  const badges = (tiers?.rankings || []).filter((item) => ['vanilla', 'sword'].includes(item.kit)).map((item) => tierBadge(item, options)).join('');
   return badges ? `<span class="tier-row">${badges}</span>` : '';
 }
 function tierSummary(tiers) {
   if (tiers.status === 'ranked') return `Source: ${tiers.source}. Last synced ${tierDate(tiers.synced_at)}${tiers.stale ? '. These may be out of date.' : '.'}`;
   if (tiers.status === 'unranked') return `No rankings on ${tiers.source}. Last synced ${tierDate(tiers.synced_at)}.${tiers.stale ? ' This may be out of date.' : ''}`;
-  return { pending: 'Waiting for the first check with MCPVP.', unavailable: 'Rankings are not available right now. This does not mean the player is unranked.', no_account_id: 'Verify Minecraft again so the account ID is known.', not_verified: 'Verify a Minecraft account to show PvP tiers.' }[tiers.status];
+  return { pending: 'Waiting for the first check with MCTiers.', unavailable: 'Rankings are not available right now. This does not mean the player is unranked.', no_account_id: 'Verify Minecraft again so the account ID is known.', not_verified: 'Verify a Minecraft account to show PvP tiers.' }[tiers.status];
 }
 /** Every kit, for profiles. */
 function tiersPanel(tiers, action = '') {
-  return `<div class="tiers-panel">${tiers.rankings.length ? `<ul class="tier-grid">${tiers.rankings.map((item) => `<li>${tierBadge(item)}<span><b>${escapeHtml(item.label)}</b><small>${escapeHtml(item.name)}${item.retired ? ', retired' : ''}</small></span></li>`).join('')}</ul>` : ''}<div class="tiers-note"><p class="muted">${escapeHtml(tierSummary(tiers))}</p>${action}</div></div>`;
+  return `<div class="tiers-panel">${tiers.rankings.length ? `<ul class="tier-grid">${tiers.rankings.map((item) => `<li>${tierBadge(item)}<span><b>${escapeHtml(item.label)}</b><small>${item.retired ? 'Retired, peak ' : ''}${escapeHtml(item.name)}${!item.retired && item.peak && item.peak !== item.tier ? `, peak ${escapeHtml(item.peak)}` : ''}</small></span></li>`).join('')}</ul>` : ''}<div class="tiers-note"><p class="muted">${escapeHtml(tierSummary(tiers))}</p>${action}</div></div>`;
+}
+/* Match history. One card everywhere: the whole card opens the match, the opponent's name opens their profile. */
+// A skin head that cannot load is removed, so the initials underneath show instead.
+document.addEventListener('error', (event) => { if (event.target.matches?.('img[data-head]')) event.target.remove(); }, true);
+function skinHeadImage(uuid, name, extra = '') {
+  const initial = `<span class="head-initial" aria-hidden="true">${escapeHtml(String(name || '?').slice(0, 1).toUpperCase())}</span>`;
+  return `<span class="head ${extra}">${uuid ? `<img data-head src="/heads/${escapeHtml(String(uuid).replaceAll('-', ''))}.png" alt="" width="40" height="40" loading="lazy" decoding="async">` : ''}${initial}</span>`;
+}
+const historyDate = (value) => new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+/** match.player_side is the side of the player whose history this is. */
+function historyCard(match, { own = false } = {}) {
+  const side = match.player_side || (match.is_creator ? 'creator' : 'opponent');
+  const other = side === 'creator' ? 'opponent' : 'creator';
+  const won = match.status === 'COMPLETED' && match.winner_side === side;
+  const [tone, label] = match.status === 'COMPLETED' ? (won ? ['win', 'Victory'] : ['loss', 'Defeat']) : { CANCELLED: ['muted', 'Cancelled'], DISPUTED: ['review', 'Disputed'], IN_PROGRESS: ['live', 'Live'], READY_UP: ['live', 'Ready up'], OPEN: ['muted', 'Open'] }[match.status] || ['muted', match.status];
+  const score = match.final_score ? `${match.final_score[side]}–${match.final_score[other]}` : '';
+  const wager = Number(match.wager_amount || 0);
+  const money = match.tournament_id ? 'Tournament' : match.status === 'COMPLETED' && wager ? (won ? `+${shortAmount(Number(match.payout_amount || 0) - wager)}` : `−${shortAmount(wager)}`) : wager ? `Entry ${shortAmount(wager)}` : '';
+  const opponent = match[other];
+  const hidden = !opponent || opponent === 'Hidden until ready';
+  const profile = match[`${other}_discord_id`];
+  const when = match.settled_at || match.cancelled_at || match.started_at || match.created_at;
+  const title = `1v1 ${modeName(match)}`;
+  const pin = own && won && wager && !match.tournament_id ? `<button class="btn btn-icon stats-mark" type="button" data-feature="${match.featured ? '' : escapeHtml(match.match_code)}" aria-pressed="${Boolean(match.featured)}" aria-label="Feature ${escapeHtml(title)}, won ${fullNumber(Number(match.payout_amount || 0) - wager)}">${icon('pin')}</button>` : '';
+  return `<li class="history-card is-${tone}">
+    <span class="history-mode mode-badge ${isCrystal(match) ? 'crystal' : 'sword'}">${modeItem(match)}</span>
+    <div class="history-main"><a class="history-link" href="${escapeHtml(matchHref(match))}" data-close-link>${escapeHtml(title)}<span class="sr-only">, ${escapeHtml(label)}${score ? ` ${escapeHtml(score)}` : ''}, ${escapeHtml(historyDate(when))}</span></a>
+      <p class="history-meta"><span>${escapeHtml(historyDate(when))}</span><span>${escapeHtml(matchRegion(match))}</span><span>${escapeHtml(matchTerms(match).label)}</span></p></div>
+    <div class="history-opponent"><small>Opponent</small>${hidden ? '<span class="muted">Not joined</span>' : `${skinHeadImage(match[`${other}_minecraft_uuid`], opponent)}${profile ? `<button class="history-player" type="button" data-player="${escapeHtml(profile)}">${escapeHtml(opponent)}</button>` : `<span>${escapeHtml(opponent)}</span>`}${tierBadge(match[`${other}_tier`])}`}</div>
+    <div class="history-result"><span class="history-badge">${escapeHtml(label)}</span>${score ? `<b class="num">${escapeHtml(score)}</b>` : ''}${money ? `<small class="num">${escapeHtml(money)}</small>` : ''}</div>
+    <span class="history-go" aria-hidden="true">View match${icon('right')}</span>${pin}
+  </li>`;
+}
+function historyPager(page, pages) {
+  if (pages <= 1) return '';
+  return `<nav class="history-pager" aria-label="Match history pages"><button class="btn btn-small" type="button" data-history-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}>${icon('left')}Newer</button><span class="num">Page ${page} of ${pages}</span><button class="btn btn-small" type="button" data-history-page="${page + 1}" ${page >= pages ? 'disabled' : ''}>Older${icon('right')}</button></nav>`;
 }
 function playerTags(tags) {
   const valid = Array.isArray(tags) ? tags.filter((tag) => String(tag || '').trim()) : [];

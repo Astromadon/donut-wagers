@@ -185,7 +185,8 @@ select.input { appearance: none; padding-right: 36px; background: #050505 url("d
 .tier-badge[data-number="3"] { --tier: #d07f3f; } .tier-badge[data-number="3"][data-band="MT"] { --tier: #e2893b; } .tier-badge[data-number="3"][data-band="HT"] { --tier: #f59b42; }
 .tier-badge[data-number="4"] { --tier: #7fb063; } .tier-badge[data-number="4"][data-band="MT"] { --tier: #8cc26b; } .tier-badge[data-number="4"][data-band="HT"] { --tier: #9fd27f; }
 .tier-badge[data-number="5"] { --tier: #6c91d2; } .tier-badge[data-number="5"][data-band="MT"] { --tier: #739be0; } .tier-badge[data-number="5"][data-band="HT"] { --tier: #7fa8f0; }
-.tier-badge[data-kit="sword"] { --kit: #8fd0ff; } .tier-badge[data-kit="crystal"], .tier-badge[data-kit="end-game"] { --kit: #e3b8ff; } .tier-badge[data-kit="shield"], .tier-badge[data-kit="cart"], .tier-badge[data-kit="bow"] { --kit: #e0b083; }
+.tier-badge[data-kit="axe"] { --kit: #ffcf8a; } .tier-badge[data-kit="nethop"] { --kit: #b9a7b5; }
+.tier-badge[data-kit="sword"] { --kit: #8fd0ff; } .tier-badge[data-kit="vanilla"], .tier-badge[data-kit="crystal"], .tier-badge[data-kit="end-game"] { --kit: #e3b8ff; } .tier-badge[data-kit="shield"], .tier-badge[data-kit="cart"], .tier-badge[data-kit="bow"] { --kit: #e0b083; }
 .tier-badge[data-kit="pot"] { --kit: #ff9ec2; } .tier-badge[data-kit="netherite-pot"], .tier-badge[data-kit="late-game"] { --kit: #b9a7b5; } .tier-badge[data-kit="uhc"] { --kit: #ff8a80; } .tier-badge[data-kit="creeper"] { --kit: #8fdc86; } .tier-badge[data-kit="smp"] { --kit: #62d6c0; } .tier-badge[data-kit="diamond-smp"] { --kit: #7fe3e6; } .tier-badge[data-kit="mace"], .tier-badge[data-kit="spear"] { --kit: #c3cbe0; }
 #tier-tip { position: fixed; inset: auto; width: max-content; max-width: min(280px, calc(100vw - 16px)); margin: 0; padding: 9px 12px; border: 1px solid var(--line-2); border-radius: var(--radius-s); background: var(--panel-3); color: var(--text-2); font-size: 12px; line-height: 1.5; box-shadow: var(--shadow); opacity: 0; transform: translateY(3px); transition: opacity .12s var(--ease), transform .12s var(--ease); }
 #tier-tip:popover-open { display: grid; opacity: 1; transform: none; }
@@ -403,3 +404,50 @@ dialog[open]::backdrop { background: rgba(0, 0, 0, .76); transition: background-
 /* Space kept while data loads, so nothing moves when it arrives. */
 [data-view="app"] #page, [data-view="room"] #page { min-height: 100vh; }
 #wallet-content:empty { min-height: 237px; }
+
+/* Match history cards: profiles and the Match History tab */
+.head { position: relative; display: inline-grid; flex: none; place-items: center; width: 32px; height: 32px; overflow: hidden; border: 1px solid var(--line-2); border-radius: 50%; background: var(--panel-3); }
+.head img { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; image-rendering: pixelated; }
+.head-initial { color: var(--text-2); font-size: 13px; font-weight: 800; }
+.history-list { display: grid; gap: 8px; }
+.history-card { position: relative; display: grid; grid-template-columns: auto minmax(0, 1.3fr) minmax(0, 1.2fr) auto auto; gap: 14px; align-items: center; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--line-2); border-radius: var(--radius); background: var(--panel); transition: border-color var(--fast), background-color var(--fast), transform var(--fast); animation: history-in .25s var(--ease) both; }
+.history-card:nth-child(2) { animation-delay: 30ms; } .history-card:nth-child(3) { animation-delay: 60ms; } .history-card:nth-child(4) { animation-delay: 90ms; } .history-card:nth-child(n+5) { animation-delay: 120ms; }
+@keyframes history-in { from { opacity: 0; transform: translateY(4px); } }
+.history-card:hover { border-color: var(--line-2); background: var(--panel-2); }
+@media (hover: hover) { .history-card:hover { transform: translateY(-1px); } }
+.history-card:focus-within { border-color: var(--accent-line); }
+.history-card.is-win { border-left-color: var(--good); }
+.history-card.is-loss { border-left-color: var(--bad); }
+.history-card.is-review { border-left-color: #ffb347; }
+.history-card.is-live { border-left-color: var(--accent); }
+.history-link { color: var(--text); font-size: 15px; font-weight: 750; }
+/* The whole card opens the match; buttons inside sit above this layer. */
+.history-link::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.history-link:focus-visible { outline: none; }
+.history-link:focus-visible::after { outline: 2px solid var(--accent); outline-offset: 2px; }
+.history-main { display: grid; gap: 2px; min-width: 0; }
+.history-meta { display: flex; flex-wrap: wrap; gap: 2px 10px; color: var(--text-3); font-size: 12.5px; }
+.history-opponent { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; min-width: 0; }
+.history-opponent small { flex-basis: 100%; color: var(--text-3); font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.history-player { position: relative; z-index: 1; min-height: 28px; overflow: hidden; padding: 0; border: 0; background: none; color: var(--text); font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.history-player:hover { color: var(--accent-2); text-decoration: underline; text-underline-offset: 3px; }
+.history-opponent .tier-badge, .history-card .stats-mark { position: relative; z-index: 1; }
+.history-result { display: grid; gap: 2px; justify-items: end; text-align: right; }
+.history-result b { font-size: 16px; font-weight: 800; }
+.history-result small { color: var(--text-2); font-size: 12.5px; }
+.history-badge { padding: 1px 8px; border-radius: 5px; background: var(--panel-3); color: var(--text-2); font-size: 12px; font-weight: 800; }
+.is-win .history-badge { background: var(--good-wash); color: var(--good); }
+.is-win .history-result small { color: var(--good); }
+.is-loss .history-badge { background: var(--bad-wash); color: var(--bad); }
+.is-review .history-badge { background: #2b1d07; color: #ffb347; }
+.is-live .history-badge { background: var(--accent-wash); color: var(--accent-2); }
+.history-go { display: inline-flex; gap: 4px; align-items: center; color: var(--text-3); font-size: 12.5px; font-weight: 700; white-space: nowrap; transition: color var(--fast), transform var(--fast); }
+.history-go .icon { width: 14px; height: 14px; }
+.history-card:hover .history-go { color: var(--accent-2); transform: translateX(2px); }
+.history-pager { display: flex; gap: 12px; align-items: center; justify-content: center; margin-top: 12px; color: var(--text-2); font-size: 13px; }
+@media (max-width: 760px) {
+  .history-card { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .history-opponent { grid-column: 2 / -1; grid-row: 2; }
+  .history-go { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .history-card { animation: fade-in .12s linear both !important; } }

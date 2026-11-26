@@ -22,6 +22,7 @@
   <symbol id="kit-shield" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M12 2.200 20 5v6.400c0 5-3.300 8.600-8 10.400-4.700-1.800-8-5.400-8-10.400V5z"/></symbol>
   <symbol id="kit-pot" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M9 2.200h6v2.300h-1v4.300a6.700 6.700 0 1 1-4 0V4.500H9zM8 14.500a4 4 0 0 0 8 0z"/></symbol>
   <symbol id="kit-armor" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M7 2.800 9.700 4.600h4.600L17 2.800l4.600 3.700-2 5-2.600-.7v10.400H7V10.800l-2.600.7-2-5z"/></symbol>
+  <symbol id="kit-axe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m14 12-8.5 8.5a2.12 2.12 0 1 1-3-3L11 9"/><path d="M15 13 9 7l4-4 6 6h3a8 8 0 0 1-7 7z"/></symbol>
   <symbol id="kit-mace" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M13.500 2.500 21.500 10.500 17.400 14.600 9.400 6.600zM9.900 10.200l3.900 3.900-7.600 7.600-3.900-3.900z"/></symbol>
   <symbol id="kit-spear" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M21.800 2.200 20 9.800 14.200 4zM14.600 7.100l2.300 2.300L5 21.300 2.700 19z"/></symbol>
   <symbol id="kit-creeper" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M3.500 3.500h17v17h-17zM6.500 7v4h4V7zM13.500 7v4h4V7zM10.500 11v2h-2v5h2v-2h3v2h2v-5h-2v-2z"/></symbol>

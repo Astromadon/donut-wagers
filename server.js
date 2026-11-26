@@ -15,8 +15,10 @@ const { checkIntegrity } = require('./lib/integrity');
 const { amountToSend, arrivingFrom, receiptMatches } = require('./lib/pay-tax');
 const { createSecurityEvents, suspiciousActivity, LABELS: SECURITY_LABELS } = require('./lib/security-events');
 const { createLiveHub } = require('./lib/live');
+const { rulesFor, checkScore } = require('./lib/match-rules');
+const { createSkinHeads } = require('./lib/skin-heads');
 const { createSupportService } = require('./lib/support-service');
-const { createMcpvpProvider, createTierSync, mergeResult, publicTiers, tierForKit, isAccountId } = require('./lib/tiers');
+const { createMctiersProvider, createTierSync, mergeResult, publicTiers, tierForKit, isAccountId } = require('./lib/tiers');
 
 loadEnvFile();
 const PORT = Number(process.env.PORT || 3000);
@@ -212,10 +214,60 @@ function createMatchCode(db) {
   return code;
 }
 function findMatch(db, code) { return db.matches.find((match) => match.match_code === code || match.id === code); }
+/* ---------- Match history: events, snapshots and scores ---------- */
+const MATCH_EVENT_LIMIT = 150;
+const SIDE_FIELDS = ['id', '', 'tags', 'tier', 'minecraft_username', 'minecraft_uuid', 'avatar_url', 'discord_id'];
+const sideOf = (match, userId) => (userId && userId === match.creator_id ? 'creator' : userId && userId === match.opponent_id ? 'opponent' : null);
+/** Appends one entry to a match's own history. Entries name sides, never people, so hidden players stay hidden. */
+function matchEvent(match, type, fields = {}, at = new Date().toISOString()) {
+  match.events ??= [];
+  match.events.push({ id: crypto.randomUUID(), type, at, ...fields });
+  if (match.events.length > MATCH_EVENT_LIMIT) match.events = match.events.slice(-MATCH_EVENT_LIMIT);
+}
+/** Older matches have no stored history, so one is rebuilt from their timestamps. */
+function matchEvents(match) {
+  if (Array.isArray(match.events) && match.events.length) return match.events;
+  const list = [];
+  const add = (type, at, fields = {}) => { if (at) list.push({ id: `${match.id}-${type}`, type, at, rebuilt: true, ...fields }); };
+  add('created', match.created_at, { side: 'creator' });
+  add('joined', match.joined_at, { side: 'opponent' });
+  add('started', match.started_at);
+  add('disputed', match.disputed_at, { reason: match.result_state === 'report_timeout' ? 'report_timeout' : 'mismatch' });
+  add('concluded', match.settled_at, { winner_side: sideOf(match, match.winner_id) });
+  add('cancelled', match.cancelled_at, { reason: match.result_state || null });
+  return list.sort((a, b) => new Date(a.at) - new Date(b.at));
+}
+/** What a player looked like when the match was played, so later renames and tier changes do not rewrite it. */
+function snapshotPlayer(user, match) {
+  if (!user) return null;
+  const tier = matchTier(user, match);
+  return {
+    user_id: user.id, username: user.discord_username, discord_id: user.discord_id, avatar_url: avatarUrl(user),
+    minecraft_username: user.minecraft_verified ? user.minecraft_username : null, minecraft_uuid: user.minecraft_verified ? user.minecraft_uuid : null,
+    tier: tier ? { kit: tier.kit, label: tier.label, tier: tier.tier, name: tier.name || null, peak: tier.peak || null, peak_name: tier.peak_name || null, retired: Boolean(tier.retired), status: tier.status || (tier.tier ? 'ranked' : null), source: tier.source || null } : null,
+  };
+}
+function recordSnapshot(db, match) {
+  match.snapshot = { recorded_at: new Date().toISOString(), creator: snapshotPlayer(db.users.find((user) => user.id === match.creator_id), match), opponent: snapshotPlayer(db.users.find((user) => user.id === match.opponent_id), match) };
+}
+const isFinished = (match) => ['COMPLETED', 'CANCELLED'].includes(match.status);
+/** Rounds won by each side, once both reports gave the same score or staff set it. */
+function finalScore(match) {
+  const score = match.final_score;
+  return score && Number.isInteger(score.creator) && Number.isInteger(score.opponent) ? { creator: score.creator, opponent: score.opponent } : null;
+}
+function hideSide(visible, side) {
+  for (const field of SIDE_FIELDS) visible[field ? `${side}_${field}` : side] = field === 'tags' ? [] : null;
+  visible[side] = 'Hidden until ready';
+}
+const REMATCH_WINDOW_MS = 30 * 60_000;
+function canRematch(match) {
+  return match.status === 'COMPLETED' && !match.tournament_id && !match.rematch_code && Boolean(match.opponent_id) && Date.now() - new Date(match.settled_at || 0).getTime() < REMATCH_WINDOW_MS;
+}
 function publicMatch(match, users) {
   const creator = users.find((user) => user.id === match.creator_id);
   const opponent = users.find((user) => user.id === match.opponent_id);
-  return {
+  const visible = {
     id: match.id,
     match_code: matchCode(match),
     match_url: matchUrl(match),
@@ -234,7 +286,23 @@ function publicMatch(match, users) {
     opponent_tags: playerTags(opponent),
     opponent_tier: matchTier(opponent, match),
     opponent_minecraft_username: opponent?.minecraft_verified ? opponent.minecraft_username : null,
+    creator_minecraft_uuid: creator?.minecraft_verified ? creator.minecraft_uuid || null : null,
+    opponent_minecraft_uuid: opponent?.minecraft_verified ? opponent.minecraft_uuid || null : null,
+    creator_avatar_url: avatarUrl(creator),
+    opponent_avatar_url: avatarUrl(opponent),
+    creator_discord_id: creator && !creator.deleted_at ? creator.discord_id : null,
+    opponent_discord_id: opponent && !opponent.deleted_at ? opponent.discord_id : null,
     winner: match.winner_id ? users.find((user) => user.id === match.winner_id)?.discord_username || null : null,
+    winner_side: sideOf(match, match.winner_id),
+    final_score: finalScore(match),
+    joined_at: match.joined_at || null,
+    started_at: match.started_at || null,
+    disputed_at: match.disputed_at || null,
+    rematch_code: match.rematch_code || null,
+    rematch_of: match.rematch_of || null,
+    rematch_vote_count: Array.isArray(match.rematch_votes) ? match.rematch_votes.length : 0,
+    can_rematch: canRematch(match),
+    historical: false,
     result_state: match.result_state || null,
     payout_amount: match.payout_amount || null,
     tournament_id: match.tournament_id || null,
@@ -248,6 +316,19 @@ function publicMatch(match, users) {
     expires_at: OPEN_STATUSES.includes(match.status) ? matchExpiresAt(match) : null,
     created_at: match.created_at,
   };
+  // A finished match shows its players as they were when it was played.
+  if (isFinished(match) && match.snapshot) {
+    visible.historical = true;
+    visible.snapshot_at = match.snapshot.recorded_at;
+    for (const side of ['creator', 'opponent']) {
+      const then = match.snapshot[side];
+      if (!then) continue;
+      Object.assign(visible, { [side]: then.username, [`${side}_minecraft_username`]: then.minecraft_username, [`${side}_minecraft_uuid`]: then.minecraft_uuid, [`${side}_avatar_url`]: then.avatar_url || visible[`${side}_avatar_url`] });
+      visible[`${side}_tier`] = then.tier ? { ...then.tier, historical: true, recorded_at: match.snapshot.recorded_at } : null;
+    }
+    if (match.winner_id) visible.winner = match.snapshot[visible.winner_side]?.username || visible.winner;
+  }
+  return visible;
 }
 function publicLobbyMatch(match, users, viewer) {
   const visible = publicMatch(match, users);
@@ -256,11 +337,7 @@ function publicLobbyMatch(match, users, viewer) {
   visible.viewer_is_participant = visible.is_creator;
   visible.can_join = Boolean(viewer && !visible.is_creator && OPEN_STATUSES.includes(match.status));
   if (!revealed) {
-    visible.creator_id = null;
-    visible.creator = 'Hidden until ready';
-    visible.creator_tags = [];
-    visible.creator_tier = null;
-    visible.creator_minecraft_username = null;
+    hideSide(visible, 'creator');
     return visible;
   }
   const creator = users.find((candidate) => candidate.id === match.creator_id);
@@ -287,23 +364,18 @@ function publicMatchForViewer(match, users, viewer) {
   visible.viewer_reported_winner_id = viewerIsParticipant ? submissions[viewer.id]?.winner_id || null : null;
   visible.opponent_has_reported = Boolean(otherId && submissions[otherId]);
   visible.viewer_voted_cancel = Boolean(viewerIsParticipant && (match.cancellation_votes || []).includes(viewer.id));
+  visible.viewer_voted_rematch = Boolean(viewerIsParticipant && (match.rematch_votes || []).includes(viewer.id));
+  visible.viewer_role = viewerIsParticipant ? 'participant' : isStaff(viewer) ? 'staff' : 'spectator';
+  visible.viewer_reported_score = viewerIsParticipant ? submissions[viewer.id]?.score || null : null;
   if (identitiesRevealed || isStaff(viewer)) return visible;
   const isParticipant = Boolean(viewer && [match.creator_id, match.opponent_id].includes(viewer.id));
   if (!isParticipant) {
-    visible.creator_id = null; visible.creator = 'Hidden until ready'; visible.creator_tags = [];
-    visible.creator_tier = null; visible.creator_minecraft_username = null;
-    visible.opponent_id = null; visible.opponent = 'Hidden until ready'; visible.opponent_tags = [];
-    visible.opponent_tier = null; visible.opponent_minecraft_username = null;
+    hideSide(visible, 'creator');
+    if (match.opponent_id) hideSide(visible, 'opponent');
     return visible;
   }
-  if (viewer.id !== match.creator_id) {
-    visible.creator_id = null; visible.creator = 'Hidden until ready'; visible.creator_tags = [];
-    visible.creator_tier = null; visible.creator_minecraft_username = null;
-  }
-  if (viewer.id !== match.opponent_id) {
-    visible.opponent_id = null; visible.opponent = 'Hidden until ready'; visible.opponent_tags = [];
-    visible.opponent_tier = null; visible.opponent_minecraft_username = null;
-  }
+  if (viewer.id !== match.creator_id) hideSide(visible, 'creator');
+  if (viewer.id !== match.opponent_id && match.opponent_id) hideSide(visible, 'opponent');
   return visible;
 }
 function publicChatMessage(message, users) {
@@ -373,6 +445,7 @@ function createTournamentRound(db, tournament, playerIds, round) {
   for (let index = 0; index < playerIds.length; index += 2) {
     const createdAt = new Date().toISOString();
     const match = { id: crypto.randomUUID(), match_code: createMatchCode(db), creator_id: playerIds[index], opponent_id: playerIds[index + 1], wager_amount: 0, game_mode: `${tournament.game_mode} · 1v1 · ${tournament.region}`, rules: tournament.rules || 'Tournament rules', status: 'IN_PROGRESS', created_at: createdAt, tournament_id: tournament.id, tournament_name: tournament.name, tournament_prize: tournament.winner_prize, tournament_round: round, tournament_slot: index / 2 };
+    matchEvent(match, 'created', { side: 'creator', tournament: true }, createdAt);
     db.matches.push(match);
     db.wagers.push({ id: match.id, player1_id: match.creator_id, player2_id: match.opponent_id, amount: 0, status: match.status, created_at: createdAt, updated_at: createdAt, tournament_id: tournament.id });
   }
@@ -469,6 +542,7 @@ function expireOpenMatches(db, now = Date.now()) {
       match.status = 'DISPUTED';
       match.result_state = 'report_timeout';
       match.disputed_at = new Date(now).toISOString();
+      matchEvent(match, 'disputed', { reason: 'report_timeout' }, match.disputed_at);
       const wagerRecord = db.wagers.find((item) => item.id === match.id);
       if (wagerRecord) { wagerRecord.status = match.status; wagerRecord.updated_at = match.disputed_at; }
       audit(db, match.creator_id, 'match_report_timeout', { wager_id: match.id });
@@ -482,6 +556,7 @@ function expireOpenMatches(db, now = Date.now()) {
     match.result_state = ready ? 'ready_timeout' : 'expired';
     match.cancelled_at = new Date(now).toISOString();
     match.cancelled_by = null;
+    matchEvent(match, 'cancelled', { reason: match.result_state }, match.cancelled_at);
     const wagerRecord = db.wagers.find((item) => item.id === match.id);
     if (wagerRecord) { wagerRecord.status = match.status; wagerRecord.updated_at = match.cancelled_at; }
     audit(db, match.creator_id, ready ? 'match_ready_timeout' : 'match_expired', { wager_id: match.id, released_amount: match.wager_amount });
@@ -702,7 +777,7 @@ function normalizePlayerTags(rawTags) {
     if (tag.length > 32) throw new Error('Each player tag must be 32 characters or fewer.');
     if (!/^[A-Za-z0-9][A-Za-z0-9 .+#&_-]*$/.test(tag)) throw new Error('Tags may use letters, numbers, spaces, and . + # & _ - only.');
     if (tag.toLowerCase() === 'owner') throw new Error('The Owner tag is reserved and applied automatically to the owner account.');
-    if (looksLikeTier(tag)) throw new Error('Tags can’t look like a PvP tier. Rankings come from MCPVP only.');
+    if (looksLikeTier(tag)) throw new Error('Tags can’t look like a PvP tier. Rankings come from MCTiers only.');
     const key = tag.toLowerCase();
     if (!seen.has(key)) { seen.add(key); tags.push(tag); }
   }
@@ -719,7 +794,10 @@ function playerTags(user) {
   catch { return []; }
 }
 const TIER_OPTIONS = { refreshMs: CONFIG.tiers.refreshMs, enabled: false };
-const tierProvider = createMcpvpProvider({ ...CONFIG.tiers, allowHttp: !IS_PRODUCTION });
+const tierProvider = createMctiersProvider({ ...CONFIG.tiers, allowHttp: !IS_PRODUCTION });
+// DonutWagers matches are Crystal PvP and Sword. On MCTiers Crystal PvP is the "vanilla" gamemode.
+const MATCH_TIER_MODES = { crystal: 'vanilla', sword: 'sword' };
+const skinHeads = createSkinHeads({ enabled: process.env.SKIN_HEADS_ENABLED !== 'false' });
 TIER_OPTIONS.enabled = tierProvider.enabled;
 const TIER_REQUEST_COOLDOWN_MS = 15 * 60_000;
 const tierSync = createTierSync({
@@ -789,15 +867,16 @@ function liveFingerprints(db, watched) {
     parts.get(match.creator_id)?.push(state);
     if (match.opponent_id) parts.get(match.opponent_id)?.push(state);
     if ([...OPEN_STATUSES, ...ACTIVE_STATUSES].includes(match.status)) lobby.push(state);
-    if (watched.matches.has(matchCode(match))) matches.set(matchCode(match), digest([state, (match.chat_messages || []).length, JSON.stringify(match.evidence || match.proof || []).length, match.ticket_channel_id || '', match.disputed_at || '']));
+    if (watched.matches.has(matchCode(match))) matches.set(matchCode(match), digest([state, (match.events || []).length, (match.rematch_votes || []).length, match.rematch_code || '', (match.chat_messages || []).length, JSON.stringify(match.evidence || match.proof || []).length, match.ticket_channel_id || '', match.disputed_at || '']));
   }
   for (const item of [...db.deposits, ...db.withdrawals]) parts.get(item.user_id)?.push(`${item.id}:${item.status}`);
   for (const item of db.support_requests) parts.get(item.user_id)?.push(`${item.id}:${item.status}`);
   for (const tournament of db.tournaments) lobby.push(`${tournament.id}:${tournament.status}:${JSON.stringify(tournament.players || tournament.player_ids || []).length}`);
   return { users: new Map([...parts].map(([id, list]) => [id, digest(list.map(String))])), lobby: digest(lobby), matches };
 }
-/** Match change hints go to the two players, staff, and anyone while the match is still open to join. */
-function canWatchMatch(user, match) { return isStaff(user) || [match.creator_id, match.opponent_id].includes(user.id) || OPEN_STATUSES.includes(match.status); }
+/** Any signed-in player may open a match page, so any may follow it. A hint says only "this changed"; what
+ * they then see is decided by the match and activity endpoints. */
+function canWatchMatch(user, match) { return Boolean(user && match); }
 function liveSessionUser(db, sessionHash) {
   const session = db.sessions.find((item) => item.id === sessionHash);
   if (!session || new Date(session.expires_at) <= new Date()) return null;
@@ -816,11 +895,11 @@ function tierCounts(db) {
   }
   return { players: counts };
 }
-function matchTier(user, match) { return user && !user.deleted_at ? tierForKit(user, modeOf(match), TIER_OPTIONS) : null; }
+function matchTier(user, match) { return user && !user.deleted_at ? tierForKit(user, MATCH_TIER_MODES[modeOf(match)], TIER_OPTIONS) : null; }
 /** The kits matches are played in here, for lists without a match to choose the kit. */
-function siteTiers(user) { const tiers = publicTiers(user, TIER_OPTIONS); return { ...tiers, rankings: tiers.rankings.filter((item) => STATISTICS_MODES.includes(item.kit)) }; }
+function siteTiers(user) { const tiers = publicTiers(user, TIER_OPTIONS); return { ...tiers, rankings: tiers.rankings.filter((item) => Object.values(MATCH_TIER_MODES).includes(item.kit)) }; }
 function tiersRefreshAt(user) { const at = new Date(user?.tiers?.requested_at || 0).getTime() + TIER_REQUEST_COOLDOWN_MS; return at > Date.now() ? new Date(at).toISOString() : null; }
-/** MCPVP knows this account under another name, so the player has probably renamed. */
+/** MCTiers knows this account under another name, so the player has probably renamed. */
 function nameHint(user) { const name = user?.tiers?.uuid === user?.minecraft_uuid && user?.tiers?.provider_name; return name && user.minecraft_verified && normalizeMinecraftUsername(name) !== normalizeMinecraftUsername(user.minecraft_username) ? name : null; }
 /** Puts an account's rankings at the front of the queue. Returns false when nothing can be fetched. */
 function queueTiers(user) {
@@ -957,6 +1036,7 @@ function settleMatch(db, match, winnerId, actorId, source) {
   } else {
     unlockMatchFunds(match, creator, opponent);
   }
+  const before = match.status;
   const winner = winnerId === creator.id ? creator : opponent;
   const loser = winnerId === creator.id ? opponent : creator;
   const wager = money(match.wager_amount);
@@ -973,6 +1053,8 @@ function settleMatch(db, match, winnerId, actorId, source) {
   match.settled_at = new Date().toISOString();
   const wagerRecord = db.wagers.find((item) => item.id === match.id);
   if (wagerRecord) { wagerRecord.status = match.status; wagerRecord.winner_id = winner.id; wagerRecord.updated_at = match.settled_at; }
+  if (before === 'DISPUTED') matchEvent(match, 'dispute_resolved', { winner_side: sideOf(match, winner.id) }, match.settled_at);
+  matchEvent(match, before === 'COMPLETED' ? 'result_corrected' : 'concluded', { winner_side: sideOf(match, winner.id), score: finalScore(match), source }, match.settled_at);
   audit(db, actorId, source === 'admin_override' ? 'match_result_overturned' : 'match_result_settled', { wager_id: match.id, winner_id: winner.id, payout_amount: winnerPayout, platform_fee: platformFee, source });
   advanceTournament(db, match, actorId);
   return { changed: true, match };
@@ -1018,6 +1100,7 @@ function deleteAccount(db, userId) {
   supportService.deleteFor(db, userId);
   for (const other of db.users) if (other.favorites?.includes(userId)) other.favorites = other.favorites.filter((id) => id !== userId);
   for (const match of db.matches) for (const message of match.chat_messages || []) if (message.user_id === userId) message.body = '[deleted]';
+  for (const match of db.matches) for (const side of ['creator', 'opponent']) if (match.snapshot?.[side]?.user_id === userId) match.snapshot[side] = { ...match.snapshot[side], username: 'Deleted player', discord_id: null, avatar_url: null, minecraft_username: null, minecraft_uuid: null, tier: null };
   for (const entry of db.audit_logs) if (entry.user_id === userId && entry.details?.minecraft_username) entry.details = { ...entry.details, minecraft_username: null, minecraft_uuid: null };
   return { deleted: true };
 }
@@ -1343,6 +1426,13 @@ async function handleRequest(request, response, requestId) {
     if (request.method === 'GET' && /^\/matches\/[a-zA-Z0-9-]+$/.test(url.pathname)) {
       const user = await currentUser(request);
       return user ? renderPage(response, 'room', { user, active: 'matches' }) : renderPage(response, 'gate', { active: 'matches', title: 'Match room | DonutWagers', heading: 'Log in to open this match', next: safeNextPath(url.pathname) || '' });
+    }
+    if (request.method === 'GET' && /^\/heads\/[0-9a-fA-F-]{32,36}\.png$/.test(url.pathname)) {
+      const body = await skinHeads.get(url.pathname.slice(7, -4));
+      // No head to show: an empty answer, which the page replaces with the player's initial.
+      if (!body) { response.writeHead(204, { 'Cache-Control': 'public, max-age=600' }); return response.end(); }
+      response.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=43200', 'Content-Length': body.length });
+      return response.end(body);
     }
     if (request.method === 'GET' && url.pathname === '/api/events') {
       const sessionToken = parseCookies(request).dw_session;
@@ -1834,9 +1924,10 @@ async function handleRequest(request, response, requestId) {
     if (request.method === 'POST' && /^\/api\/admin\/matches\/[^/]+\/resolve$/.test(url.pathname)) {
       const user = await currentUser(request);
       if (!requireStaff(response, user)) return;
-      const { winner_id, winnerId: requestedWinnerId } = await readJson(request);
+      const { winner_id, winnerId: requestedWinnerId, winner_rounds, loser_rounds } = await readJson(request);
       const winnerId = String(winner_id || requestedWinnerId || '');
       const code = decodeURIComponent(url.pathname.split('/')[4]);
+      const staffScore = [winner_rounds, loser_rounds].every((value) => value === undefined || value === null || value === '') ? null : { winner_rounds, loser_rounds };
       const outcome = await withEscrowMutation(async () => {
         const db = await readDb();
         const match = findMatch(db, code);
@@ -1846,6 +1937,11 @@ async function handleRequest(request, response, requestId) {
         if (!isOwner(user) && [match.creator_id, match.opponent_id].includes(user.id)) return { status: 403, error: 'You can’t decide a match you are playing in. Ask another staff member.' };
         if (staffRole(user) === 'helper' && !['IN_PROGRESS', 'DISPUTED'].includes(match.status)) return { status: 403, error: 'Helpers can only resolve active or disputed matches.' };
         if (match.tournament_id && match.status === 'COMPLETED' && match.winner_id !== winnerId) return { status: 409, error: 'A completed bracket result cannot be overturned after advancement. Resolve tournament disputes before confirming the round.' };
+        if (staffScore) {
+          const checked = checkScore(match.rules, staffScore.winner_rounds, staffScore.loser_rounds);
+          if (checked.error) return { status: 400, error: checked.error };
+          match.final_score = sideOf(match, winnerId) === 'creator' ? { creator: checked.score.winner, opponent: checked.score.loser } : { creator: checked.score.loser, opponent: checked.score.winner };
+        }
         let result;
         try { result = settleMatch(db, match, winnerId, user.id, 'admin_override'); }
         catch (error) { return { status: 409, error: error.message || 'The result could not be updated.' }; }
@@ -2214,7 +2310,7 @@ async function handleRequest(request, response, requestId) {
         return { status: 200, userId: record.user_id };
       });
       if (outcome.error) return sendJson(response, outcome.status, { error: outcome.error });
-      // MCPVP can take seconds to answer, so it never holds the database lock or the bot's reply.
+      // MCTiers can take seconds to answer, so it never holds the database lock or the bot's reply.
       syncTiers();
       return sendJson(response, 200, { verified: true, minecraftUuid: senderUuid, minecraft_uuid: senderUuid, minecraftUsername: senderUsername, minecraft_username: senderUsername });
     }
@@ -2426,8 +2522,15 @@ async function handleRequest(request, response, requestId) {
       if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
       const db = await readDb();
       const newestFirst = (a, b) => new Date(b.created_at) - new Date(a.created_at);
+      const query = String(url.searchParams.get('q') || '').trim().toLowerCase().slice(0, 32);
+      const named = (match) => !query || [match.creator_id, match.opponent_id].some((id) => { const player = db.users.find((item) => item.id === id); return player && !player.deleted_at && [player.discord_username, player.minecraft_verified ? player.minecraft_username : ''].some((name) => String(name || '').toLowerCase().includes(query)); });
       if (url.searchParams.get('status') === 'ongoing') {
-        return sendJson(response, 200, db.matches.filter((match) => ACTIVE_STATUSES.includes(match.status)).sort(newestFirst).slice(0, 60).map((match) => publicMatchForViewer(match, db.users, user)));
+        return sendJson(response, 200, db.matches.filter((match) => ACTIVE_STATUSES.includes(match.status) && (match.status !== 'READY_UP' || !query) && named(match)).sort(newestFirst).slice(0, 60).map((match) => publicMatchForViewer(match, db.users, user)));
+      }
+      if (url.searchParams.get('status') === 'completed') {
+        const page = Math.max(1, Math.min(500, Math.trunc(Number(url.searchParams.get('page')) || 1)));
+        const done = db.matches.filter((match) => match.status === 'COMPLETED' && named(match)).sort((a, b) => new Date(b.settled_at || b.created_at) - new Date(a.settled_at || a.created_at));
+        return sendJson(response, 200, { page, pages: Math.max(1, Math.ceil(done.length / 24)), total: done.length, matches: done.slice((page - 1) * 24, page * 24).map((match) => publicMatchForViewer(match, db.users, user)) });
       }
       return sendJson(response, 200, db.matches.filter((match) => OPEN_STATUSES.includes(match.status) && !isMatchExpired(match)).sort(newestFirst).map((match) => publicLobbyMatch(match, db.users, user)));
     }
@@ -2454,6 +2557,28 @@ async function handleRequest(request, response, requestId) {
       });
       return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : outcome);
     }
+    if (request.method === 'GET' && /^\/api\/players\/[^/]+\/matches$/.test(url.pathname)) {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      const db = await readDb();
+      const key = decodeURIComponent(url.pathname.split('/')[3]);
+      const player = key === 'me' ? user : db.users.find((candidate) => candidate.discord_id === key && !candidate.deleted_at);
+      if (!player) return sendJson(response, 404, { error: 'Player not found.' });
+      const own = player.id === user.id;
+      const mode = STATISTICS_MODES.includes(url.searchParams.get('mode')) ? url.searchParams.get('mode') : null;
+      const result = url.searchParams.get('result');
+      const page = Math.max(1, Math.min(500, Math.trunc(Number(url.searchParams.get('page')) || 1)));
+      const size = 10;
+      // Other players see matches where both names are already public: started, finished, or cancelled after joining.
+      const listed = db.matches.filter((match) => [match.creator_id, match.opponent_id].includes(player.id)
+        && (own || (match.opponent_id && ['IN_PROGRESS', 'DISPUTED', 'COMPLETED', 'CANCELLED'].includes(match.status) && (match.status !== 'CANCELLED' || match.started_at)))
+        && (!mode || modeOf(match) === mode)
+        && (!result || (result === 'won' ? match.status === 'COMPLETED' && match.winner_id === player.id : result === 'lost' ? match.status === 'COMPLETED' && match.winner_id && match.winner_id !== player.id : result === 'active' ? [...OPEN_STATUSES, ...ACTIVE_STATUSES].includes(match.status) : result === 'cancelled' ? match.status === 'CANCELLED' : true)))
+        .sort((a, b) => new Date(b.settled_at || b.cancelled_at || b.created_at) - new Date(a.settled_at || a.cancelled_at || a.created_at));
+      const pages = Math.max(1, Math.ceil(listed.length / size));
+      const matches = listed.slice((page - 1) * size, page * size).map((match) => ({ ...publicMatchForViewer(match, db.users, user), player_side: sideOf(match, player.id), featured: own && match.id === player.featured_match_id }));
+      return sendJson(response, 200, { player: { username: player.discord_username, discord_id: player.discord_id }, own, page, pages, total: listed.length, matches });
+    }
     if (request.method === 'GET' && url.pathname === '/api/me/matches') {
       const user = await currentUser(request);
       if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
@@ -2475,7 +2600,8 @@ async function handleRequest(request, response, requestId) {
       if (isMatchExpired(match)) match = { ...match, status: 'CANCELLED', result_state: 'expired' };
       else if (isReadyExpired(match)) match = { ...match, status: 'CANCELLED', result_state: 'ready_timeout' };
       const open = OPEN_STATUSES.includes(match.status);
-      return sendJson(response, 200, open ? publicLobbyMatch(match, db.users, user) : publicMatchForViewer(match, db.users, user));
+      // Only the match page needs the rules, so lists stay small.
+      return sendJson(response, 200, { ...(open ? publicLobbyMatch(match, db.users, user) : publicMatchForViewer(match, db.users, user)), rules_panel: rulesFor(modeOf(match), match.rules) });
     }
     if (request.method === 'POST' && /^\/api\/matches\/[^/]+\/ready$/.test(url.pathname)) {
       const user = await currentUser(request);
@@ -2487,9 +2613,10 @@ async function handleRequest(request, response, requestId) {
         if (!match) return { status: 404, error: 'Match not found.' };
         if (match.status !== 'READY_UP' || isReadyExpired(match) || ![match.creator_id, match.opponent_id].includes(user.id)) return { status: 409, error: 'This match is not waiting for your ready-up.' };
         match.ready_user_ids ??= [];
-        if (!match.ready_user_ids.includes(user.id)) match.ready_user_ids.push(user.id);
+        // A repeated ready press changes nothing and adds nothing to the history.
+        if (!match.ready_user_ids.includes(user.id)) { match.ready_user_ids.push(user.id); matchEvent(match, 'ready', { side: sideOf(match, user.id) }); }
         const bothReady = [match.creator_id, match.opponent_id].every((id) => match.ready_user_ids.includes(id));
-        if (bothReady) { match.status = 'IN_PROGRESS'; match.started_at = new Date().toISOString(); match.cancellation_votes = []; }
+        if (bothReady) { match.status = 'IN_PROGRESS'; match.started_at = new Date().toISOString(); match.cancellation_votes = []; recordSnapshot(db, match); matchEvent(match, 'started', {}, match.started_at); }
         const wagerRecord = db.wagers.find((item) => item.id === match.id);
         if (wagerRecord) { wagerRecord.status = match.status; wagerRecord.updated_at = new Date().toISOString(); }
         audit(db, user.id, 'match_ready', { wager_id: match.id, both_ready: bothReady });
@@ -2539,8 +2666,9 @@ async function handleRequest(request, response, requestId) {
     if (request.method === 'POST' && /^\/api\/matches\/[^/]+\/result$/.test(url.pathname)) {
       const user = await currentUser(request);
       if (!user) return sendJson(response, 401, { error: 'Sign in to report a match result.' });
-      const { winner_id, winnerId } = await readJson(request);
+      const { winner_id, winnerId, winner_rounds, loser_rounds } = await readJson(request);
       const selectedWinnerId = String(winner_id || winnerId || '');
+      const blankScore = (value) => value === undefined || value === null || value === '';
       const code = decodeURIComponent(url.pathname.split('/')[3]);
       const outcome = await withEscrowMutation(async () => {
         const db = await readDb();
@@ -2549,8 +2677,14 @@ async function handleRequest(request, response, requestId) {
         if (!match.opponent_id || ![match.creator_id, match.opponent_id].includes(user.id)) { securityEvents.record('match_access_denied', user.id); return { status: 403, error: 'Only match participants can report this result.' }; }
         if (!['IN_PROGRESS', 'DISPUTED'].includes(match.status)) return { status: 409, error: 'This match is not ready to receive a result.' };
         if (![match.creator_id, match.opponent_id].includes(selectedWinnerId)) return { status: 400, error: 'Select one of the two match participants.' };
+        const checked = blankScore(winner_rounds) && blankScore(loser_rounds) ? { score: null } : checkScore(match.rules, winner_rounds, loser_rounds);
+        if (checked.error) return { status: 400, error: checked.error };
         match.result_submissions ??= {};
-        match.result_submissions[user.id] = { winner_id: selectedWinnerId, submitted_at: new Date().toISOString() };
+        const previous = match.result_submissions[user.id];
+        // Sending the same report twice is accepted once.
+        if (previous && previous.winner_id === selectedWinnerId && JSON.stringify(previous.score || null) === JSON.stringify(checked.score)) return { status: 200, outcome: match.status === 'DISPUTED' ? 'disputed' : 'waiting_for_opponent', match: publicMatch(match, db.users) };
+        match.result_submissions[user.id] = { winner_id: selectedWinnerId, score: checked.score, submitted_at: new Date().toISOString() };
+        matchEvent(match, 'result_submitted', { side: sideOf(match, user.id), winner_side: sideOf(match, selectedWinnerId), score: checked.score, changed: Boolean(previous) });
         // A cancellation asked for before the fight must not be accepted after it.
         match.cancellation_votes = [];
         const creatorResult = match.result_submissions[match.creator_id];
@@ -2558,12 +2692,16 @@ async function handleRequest(request, response, requestId) {
         let resultOutcome = 'waiting_for_opponent';
         if (creatorResult && opponentResult) {
           if (creatorResult.winner_id === opponentResult.winner_id) {
+            // The score counts only when both players gave the same one.
+            const agreed = creatorResult.score && opponentResult.score && creatorResult.score.winner === opponentResult.score.winner && creatorResult.score.loser === opponentResult.score.loser ? creatorResult.score : null;
+            if (agreed) match.final_score = sideOf(match, creatorResult.winner_id) === 'creator' ? { creator: agreed.winner, opponent: agreed.loser } : { creator: agreed.loser, opponent: agreed.winner };
             settleMatch(db, match, creatorResult.winner_id, user.id, 'player_agreement');
             resultOutcome = 'settled';
           } else {
             match.status = 'DISPUTED';
             match.result_state = 'disputed';
             match.disputed_at = new Date().toISOString();
+            matchEvent(match, 'disputed', { reason: 'mismatch' }, match.disputed_at);
             audit(db, user.id, 'match_result_disputed', { wager_id: match.id });
             resultOutcome = 'disputed';
           }
@@ -2595,6 +2733,7 @@ async function handleRequest(request, response, requestId) {
           match.result_state = 'creator_cancelled_before_join';
           match.cancelled_at = new Date().toISOString();
           match.cancelled_by = user.id;
+          matchEvent(match, 'cancelled', { reason: match.result_state, side: 'creator' }, match.cancelled_at);
           const wagerRecord = db.wagers.find((item) => item.id === match.id);
           if (wagerRecord) { wagerRecord.status = match.status; wagerRecord.updated_at = match.cancelled_at; }
           audit(db, user.id, 'match_cancelled', { wager_id: match.id, type: 'creator_before_join', released_amount: match.wager_amount });
@@ -2603,7 +2742,7 @@ async function handleRequest(request, response, requestId) {
         }
         if (!['READY_UP', 'IN_PROGRESS', 'DISPUTED'].includes(match.status) || !match.opponent_id) return { status: 409, error: 'This match can no longer be cancelled.' };
         match.cancellation_votes ??= [];
-        if (!match.cancellation_votes.includes(user.id)) match.cancellation_votes.push(user.id);
+        if (!match.cancellation_votes.includes(user.id)) { match.cancellation_votes.push(user.id); matchEvent(match, 'cancellation_requested', { side: sideOf(match, user.id) }); }
         const bothApproved = [match.creator_id, match.opponent_id].every((id) => match.cancellation_votes.includes(id));
         if (!bothApproved) {
           match.cancellation_requested_at = new Date().toISOString();
@@ -2618,6 +2757,7 @@ async function handleRequest(request, response, requestId) {
         match.result_state = 'mutual_cancellation';
         match.cancelled_at = new Date().toISOString();
         match.cancelled_by = null;
+        matchEvent(match, 'cancelled', { reason: match.result_state }, match.cancelled_at);
         const wagerRecord = db.wagers.find((item) => item.id === match.id);
         if (wagerRecord) { wagerRecord.status = match.status; wagerRecord.updated_at = match.cancelled_at; }
         audit(db, user.id, 'match_cancelled', { wager_id: match.id, type: 'mutual', released_amount_per_player: match.wager_amount });
@@ -2625,6 +2765,62 @@ async function handleRequest(request, response, requestId) {
         return { status: 200, outcome: 'cancelled', match: publicMatch(match, db.users) };
       });
       return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : { outcome: outcome.outcome, match: outcome.match });
+    }
+    if (request.method === 'GET' && /^\/api\/matches\/[^/]+\/activity$/.test(url.pathname)) {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      const db = await readDb();
+      const match = findMatch(db, decodeURIComponent(url.pathname.split('/')[3]));
+      if (!match) return sendJson(response, 404, { error: 'Match not found.' });
+      const participant = [match.creator_id, match.opponent_id].includes(user.id);
+      const staff = isStaff(user);
+      const revealed = ['IN_PROGRESS', 'DISPUTED', 'COMPLETED', 'CANCELLED'].includes(match.status);
+      // Spectators see what happened, not what each player reported, and never the private chat.
+      const events = matchEvents(match).map((event) => (participant || staff || isFinished(match) || event.type !== 'result_submitted' ? event : { id: event.id, type: event.type, at: event.at, side: event.side }));
+      const messages = (participant || staff) && revealed ? (Array.isArray(match.chat_messages) ? match.chat_messages : []).slice(-100).map((message) => publicChatMessage(message, db.users)) : [];
+      return sendJson(response, 200, { events, messages, role: participant ? 'participant' : staff ? 'staff' : 'spectator', can_send: (participant || staff) && ['IN_PROGRESS', 'DISPUTED'].includes(match.status) && siteFeatures().chat, chat_visible: participant || staff, locked_until_ready: !revealed });
+    }
+    if (request.method === 'POST' && /^\/api\/matches\/[^/]+\/rematch$/.test(url.pathname)) {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      await readJson(request);
+      const code = decodeURIComponent(url.pathname.split('/')[3]);
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const match = findMatch(db, code);
+        if (!match) return { status: 404, error: 'Match not found.' };
+        if (![match.creator_id, match.opponent_id].includes(user.id)) { securityEvents.record('match_access_denied', user.id); return { status: 403, error: 'Only the two players can ask for a rematch.' }; }
+        if (match.rematch_code) return { status: 200, outcome: 'created', rematch_code: match.rematch_code };
+        if (!canRematch(match)) return { status: 409, error: 'A rematch can be asked for within 30 minutes of a settled match.' };
+        match.rematch_votes ??= [];
+        if (!match.rematch_votes.includes(user.id)) { match.rematch_votes.push(user.id); matchEvent(match, 'rematch_requested', { side: sideOf(match, user.id) }); }
+        if (![match.creator_id, match.opponent_id].every((id) => match.rematch_votes.includes(id))) { await writeDb(db); return { status: 200, outcome: 'waiting_for_opponent' }; }
+        // Both agreed: a new match with the same terms, straight to ready-up, with both entries locked.
+        const players = [match.creator_id, match.opponent_id].map((id) => db.users.find((item) => item.id === id));
+        for (const player of players) {
+          const block = activeBan(db, player?.id) ? { error: 'A player in this match is banned.' } : await checkWagerEligibility(player?.id, match.wager_amount, db);
+          if (block.error || block.eligible === false) {
+            match.rematch_votes = [];
+            matchEvent(match, 'rematch_failed', { side: sideOf(match, player?.id) });
+            await writeDb(db);
+            return { status: 409, error: player?.id === user.id ? block.reason || block.error : 'Your opponent cannot play a rematch right now (balance, break, or settings). The request was cleared.' };
+          }
+        }
+        const now = new Date().toISOString();
+        for (const player of players) player.locked_balance = money(player.locked_balance) + money(match.wager_amount);
+        // Same sides as before, so any round lead goes to the same player again.
+        const rematch = { id: crypto.randomUUID(), match_code: createMatchCode(db), creator_id: match.creator_id, opponent_id: match.opponent_id, wager_amount: match.wager_amount, game_mode: match.game_mode, rules: match.rules, status: 'READY_UP', created_at: now, joined_at: now, ready_user_ids: [], rematch_of: matchCode(match) };
+        matchEvent(rematch, 'created', { side: 'creator', rematch_of: matchCode(match) }, now);
+        matchEvent(rematch, 'joined', { side: 'opponent' }, now);
+        db.matches.push(rematch);
+        db.wagers.push({ id: rematch.id, player1_id: rematch.creator_id, player2_id: rematch.opponent_id, amount: rematch.wager_amount, status: rematch.status, created_at: now, updated_at: now });
+        match.rematch_code = rematch.match_code;
+        matchEvent(match, 'rematch_created', { code: rematch.match_code }, now);
+        audit(db, user.id, 'match_rematch_created', { wager_id: match.id, rematch_id: rematch.id, amount: rematch.wager_amount });
+        await writeDb(db);
+        return { status: 201, outcome: 'created', rematch_code: rematch.match_code };
+      });
+      return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : { outcome: outcome.outcome, rematch_code: outcome.rematch_code || null });
     }
     if (request.method === 'POST' && /^\/api\/matches\/[^/]+\/contact-staff$/.test(url.pathname)) {
       const user = await currentUser(request);
@@ -2691,6 +2887,7 @@ async function handleRequest(request, response, requestId) {
         if (twin) return { status: 200, match: publicMatch(twin, db.users) };
         storedUser.locked_balance = money(storedUser.locked_balance) + wager;
         const match = { id: crypto.randomUUID(), match_code: createMatchCode(db), creator_id: user.id, opponent_id: null, wager_amount: wager, game_mode: terms.game_mode, rules: terms.rules, status: 'OPEN', created_at: new Date().toISOString() };
+        matchEvent(match, 'created', { side: 'creator' }, match.created_at);
         db.matches.push(match);
         db.wagers.push({ id: match.id, player1_id: user.id, player2_id: null, amount: wager, status: match.status, created_at: match.created_at, updated_at: match.created_at });
         audit(db, user.id, 'wager_created', { wager_id: match.id, amount: wager, available_balance_after_reservation: availableBalance(storedUser) });
@@ -2718,6 +2915,7 @@ async function handleRequest(request, response, requestId) {
         match.status = 'READY_UP';
         match.joined_at = new Date().toISOString();
         match.ready_user_ids = [];
+        matchEvent(match, 'joined', { side: 'opponent' }, match.joined_at);
         const wagerRecord = db.wagers.find((item) => item.id === match.id);
         if (wagerRecord) { wagerRecord.player2_id = user.id; wagerRecord.status = match.status; wagerRecord.updated_at = new Date().toISOString(); }
         audit(db, user.id, 'wager_joined', { wager_id: match.id, amount: match.wager_amount, available_balance_after_reservation: availableBalance(joiningUser) });
@@ -2772,7 +2970,7 @@ async function startServer() {
   for (const warning of CONFIG.warnings) observability.log('warn', 'configuration', { message: warning });
   setInterval(() => sweepExpired().catch((error) => observability.log('error', 'sweep_failed', { message: error.message })), 30_000).unref();
   setInterval(() => rateLimiter.prune(), 60_000).unref();
-  if (tierProvider.enabled) setInterval(syncTiers, 60_000).unref();
+  if (tierProvider.enabled) { setInterval(syncTiers, 60_000).unref(); tierProvider.loadModes().catch(() => undefined); }
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('unhandledRejection', (error) => observability.log('error', 'unhandled_rejection', { message: error?.message }));

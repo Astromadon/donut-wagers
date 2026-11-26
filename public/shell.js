@@ -474,7 +474,7 @@ function featuredCard(stats, own) {
   return top ? `<section class="stats-featured is-offer"><span class="stats-pin">${icon('pin')}</span><div><small>Your biggest win</small><h4>1v1 ${modeName(top)}</h4><p>${matchFacts(top)}</p></div><button class="btn btn-small btn-gold" type="button" data-feature="${escapeHtml(top.match_code)}">${icon('pin')}Feature this match</button></section>`
     : `<section class="stats-featured is-offer"><span class="stats-pin">${icon('pin')}</span><div><small>Featured match</small><p>Win a wager match and you can feature it here.</p></div></section>`;
 }
-const statsState = { player: null, own: true, view: 'overview', sort: 'biggest', request: 0 };
+const statsState = { player: null, own: true, view: 'overview', result: '', page: 1, request: 0 };
 const statsUrl = (path = '') => `${statsState.own ? '/api/me' : `/api/players/${encodeURIComponent(statsState.player)}`}/statistics${path}?mode=${$('#statistics-mode').value}`;
 async function showStatistics() {
   const content = $('#statistics-content');
@@ -483,9 +483,12 @@ async function showStatistics() {
   try {
     let markup;
     if (statsState.view === 'matches') {
-      const { matches, total } = await api(`${statsUrl('/matches')}&sort=${statsState.sort}`);
-      const top = matches.reduce((best, match) => Math.max(best, match.profit), 0);
-      markup = `<div class="stats-view"><div class="stats-toolbar"><button class="btn btn-small" type="button" data-stats-view="overview">${icon('left')}Overview</button><select id="statistics-sort" class="input" aria-label="Sort matches"><option value="biggest">Biggest wins</option><option value="newest">Newest</option></select></div>${own ? '<p class="muted">Press the pin on a match you won to feature it on your statistics.</p>' : ''}${matches.length ? `<ul class="stats-matches">${matches.map((match) => `<li><span class="mode-badge ${isCrystal(match) ? 'crystal' : 'sword'}">${modeItem(match)}</span><div><b>${own ? `<a class="text-link" href="${escapeHtml(match.match_path)}" data-close-link>1v1 ${modeName(match)}</a>` : `1v1 ${modeName(match)}`}</b>${match.profit > 0 && match.profit === top ? ' <span class="tag tag-gold">Biggest win</span>' : ''}${match.tournament ? ' <span class="tag">Tournament</span>' : ''}<p class="stats-facts">${matchFacts(match)}</p></div>${own && match.won && match.profit > 0 ? `<button class="btn btn-icon stats-mark" type="button" data-feature="${match.featured ? '' : escapeHtml(match.match_code)}" aria-pressed="${match.featured}" aria-label="Feature 1v1 ${modeName(match)}, won ${fullNumber(match.profit)}">${icon('pin')}</button>` : match.featured ? '<span class="tag tag-gold">Featured</span>' : ''}</li>`).join('')}</ul>${total > matches.length ? `<p class="muted">Showing ${matches.length} of ${fullNumber(total)} matches.</p>` : ''}` : emptyState('swords', 'No settled matches', 'Finished matches will be listed here.')}</div>`;
+      const mode = $('#statistics-mode').value;
+      const history = await api(`/api/players/${own ? 'me' : encodeURIComponent(player)}/matches?page=${statsState.page}${mode !== 'all' ? `&mode=${mode}` : ''}${statsState.result ? `&result=${statsState.result}` : ''}`);
+      const results = [['', 'All results'], ['won', 'Victories'], ['lost', 'Defeats'], ['active', 'Active'], ['cancelled', 'Cancelled']];
+      markup = `<div class="stats-view"><div class="stats-toolbar"><button class="btn btn-small" type="button" data-stats-view="overview">${icon('left')}Overview</button><select id="statistics-result" class="input" aria-label="Show results">${results.map(([value, text]) => `<option value="${value}" ${statsState.result === value ? 'selected' : ''}>${text}</option>`).join('')}</select></div>
+        ${own ? '<p class="muted">Open any match to see it in full. Press the pin on a win to feature it on your statistics.</p>' : '<p class="muted">Open any match to see it in full.</p>'}
+        ${history.matches.length ? `<ul class="history-list">${history.matches.map((match) => historyCard(match, { own })).join('')}</ul>${historyPager(history.page, history.pages)}` : emptyState('swords', 'No matches here', statsState.result || mode !== 'all' ? 'Try another filter.' : 'Matches will be listed here once they start.')}</div>`;
     } else {
       const [stats, saved] = await Promise.all([api(statsUrl()), own ? null : api('/api/me/favorites')]);
       const isFavorite = Boolean(saved?.players.some((item) => item.discord_id === player));
@@ -494,13 +497,12 @@ async function showStatistics() {
     }
     if (request !== statsState.request) return;
     content.innerHTML = markup;
-    if ($('#statistics-sort')) $('#statistics-sort').value = statsState.sort;
   } catch (error) { if (request === statsState.request) content.innerHTML = `<div class="notice notice-bad">${icon('alert')}<span>${escapeHtml(error.message)}</span></div>`; }
 }
 function openStatistics(discordId = null) {
   closeMenus();
   const own = !discordId || discordId === me.discord_id;
-  Object.assign(statsState, { player: discordId, own, view: 'overview', sort: own ? 'biggest' : 'newest' });
+  Object.assign(statsState, { player: discordId, own, view: 'overview', result: '', page: 1 });
   $('#statistics-mode').value = 'all';
   $('#statistics-content').innerHTML = skeletons(1);
   if (!$('#statistics-dialog').open) $('#statistics-dialog').showModal();
@@ -526,9 +528,7 @@ async function featureMatch(button) {
 }
 $('#statistics-mode').addEventListener('change', showStatistics);
 $('#statistics-content').addEventListener('change', (event) => {
-  if (event.target.id !== 'statistics-sort') return;
-  statsState.sort = event.target.value;
-  showStatistics().then(() => $('#statistics-sort')?.focus());
+  if (event.target.id === 'statistics-result') { statsState.result = event.target.value; statsState.page = 1; showStatistics().then(() => $('#statistics-result')?.focus()); return; }
 });
 function memberSince(value) {
   const date = new Date(value);
@@ -629,7 +629,8 @@ document.addEventListener('click', (event) => {
   else if (hit('[data-verify]')) openVerify();
   else if ((button = hit('[data-favorite]'))) toggleFavorite(button);
   else if ((button = hit('[data-feature]'))) featureMatch(button);
-  else if ((button = hit('[data-stats-view]'))) changeStatisticsView(button.dataset.statsView);
+  else if ((button = hit('[data-stats-view]'))) { statsState.page = 1; changeStatisticsView(button.dataset.statsView); }
+  else if ((button = hit('#statistics-content [data-history-page]'))) { statsState.page = Number(button.dataset.historyPage); showStatistics().then(() => $('#statistics-content .history-link')?.focus()); }
   else if (hit('[data-close-link]')) $('#statistics-dialog').close();
   else if ((button = hit('[data-copy]'))) copyText(button.dataset.copy, button.dataset.copyMessage || (/^\//.test(button.dataset.copy) ? 'Command copied.' : undefined));
   else if ((button = hit('[data-player]'))) { clearSearch(); $('#player-search-input').value = ''; openStatistics(button.dataset.player); }

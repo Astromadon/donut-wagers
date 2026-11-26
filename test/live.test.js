@@ -66,8 +66,11 @@ test('live updates: signed-in only, own changes, own matches, bounded tabs, sign
   assert.ok(!owner.events.some((event) => event.type === 'account'), 'another player’s balance change is not announced');
   for (const event of kestrel.events) assert.deepEqual(Object.keys(event.data).filter((key) => key !== 'code'), ['at'], 'events carry hints, never data');
 
-  // A match channel only for people who may follow that match.
-  assert.equal((await listen(server, 3, '?match=code4aa')).status, 404, 'not Kestrel’s match');
+  // Anyone signed in may open a match page, so anyone may follow it; the hints carry no data.
+  const watcher = await listen(server, 3, '?match=code4aa');
+  assert.equal(watcher.status, 200);
+  await watcher.close();
+  assert.equal((await listen(server, 3, '?match=nosuchcode')).status, 404);
   assert.equal((await listen(server, 3, '?match=..%2Fetc')).status, 404);
   const room = await listen(server, 0, '?match=code4aa');
   assert.equal(room.status, 200);

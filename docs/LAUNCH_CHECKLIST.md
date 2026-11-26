@@ -12,7 +12,8 @@
 - [ ] DonutSMP rules allow player wagers and this bot
 - [ ] Minecraft commercial use and item textures checked against Mojang's guidelines
 - [ ] Security contact published
-- [ ] MCPVP has approved access and given an address ([TIERS.md](TIERS.md)); until then tiers stay off
+- [ ] Match rules in `lib/match-rules.js` reviewed (disconnect and forfeit rules, allowed and banned mods, kit wording are new policy)
+- [ ] MCTiers' terms checked for this use of their public API
 
 ## Staging
 

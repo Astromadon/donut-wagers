@@ -242,15 +242,22 @@ test('statistics: overview, game filter, and marking a match', async ({ page, se
   await expect(total).toHaveText(all);
   await dialog.getByRole('button', { name: 'View Matches' }).click();
   await expect(dialog.getByRole('button', { name: 'Overview' })).toBeFocused();
-  await expect(dialog.locator('.stats-matches li').first()).toContainText('Biggest win');
-  const marks = dialog.locator('.stats-mark');
-  await expect(marks.first()).toHaveAttribute('aria-pressed', 'true');
-  await marks.nth(1).click();
-  await expect(marks.nth(1)).toHaveAttribute('aria-pressed', 'true');
-  await expect(marks.first()).toHaveAttribute('aria-pressed', 'false');
-  await marks.nth(1).click();
-  await expect(marks.nth(1)).toHaveAttribute('aria-pressed', 'false');
-  await marks.first().click();
+  await expect(dialog.locator('.history-card').first()).toBeVisible();
+  const pressed = dialog.locator('.stats-mark[aria-pressed="true"]');
+  await expect(pressed).toHaveCount(1);
+  const other = dialog.locator('.stats-mark[aria-pressed="false"]').first();
+  const label = await other.getAttribute('aria-label');
+  const chosen = dialog.locator(`.stats-mark[aria-label="${label}"]`).first();
+  await other.click();
+  await expect(chosen).toHaveAttribute('aria-pressed', 'true');
+  await expect(pressed).toHaveCount(1);
+  await chosen.click();
+  await expect(pressed).toHaveCount(0);
+  await dialog.locator('.stats-mark').first().click();
+  await expect(pressed).toHaveCount(1);
+  await dialog.locator('#statistics-result').selectOption('lost');
+  await expect(dialog.locator('.history-card.is-loss').first()).toBeVisible();
+  await expect(dialog.locator('.history-card:not(.is-loss)')).toHaveCount(0);
   await dialog.getByRole('button', { name: 'Overview' }).click();
   const { violations } = await new AxeBuilder({ page }).include('#statistics-dialog').withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze();
   expect(violations.map((v) => `${v.id} ${v.nodes[0].target} ${v.nodes[0].any[0]?.message || ''}`)).toEqual([]);
@@ -261,42 +268,48 @@ test('statistics: overview, game filter, and marking a match', async ({ page, se
   await expect(page).toHaveURL(/\/matches\/code/);
   await expect(dialog).toBeHidden();
 
-  // Another player's view: no offers, no pins, no links into rooms.
+  // Another player's view: no offers and no pins, but every listed match opens in full.
   await page.locator('#player-search-input').fill('rival');
   await page.locator('#player-search-results [data-player]').click();
   await expect(dialog.getByRole('heading', { name: 'RivalTest' })).toBeVisible();
-  await expect(dialog.locator('[data-feature], a')).toHaveCount(0);
+  await expect(dialog.locator('[data-feature]')).toHaveCount(0);
   await dialog.getByRole('button', { name: 'View Matches' }).click();
-  await expect(dialog.locator('.stats-matches li').first()).toBeVisible();
-  await expect(dialog.locator('[data-feature], a')).toHaveCount(0);
+  await expect(dialog.locator('.history-card').first()).toBeVisible();
+  await expect(dialog.locator('[data-feature]')).toHaveCount(0);
+  const first = dialog.locator('.history-link').first();
+  const href = await first.getAttribute('href');
+  await first.click();
+  await expect(page).toHaveURL(server.base + href);
+  await expect(dialog).toBeHidden();
+  await expect(page.locator('.room-header h1')).toContainText('1v1');
 });
 
 const accountId = (n) => `0000000${n}-0000-4000-8000-00000000000${n}`;
-const ranked = (db, n, rankings, extra = {}) => Object.assign(db.users[n], { minecraft_uuid: accountId(n + 1), tiers: { uuid: accountId(n + 1), source: 'mcpvp', rankings: rankings.map(([kit, tier]) => ({ kit, tier, retired: false })), synced_at: new Date().toISOString(), next_attempt_at: new Date(Date.now() + 9e6).toISOString(), error: null, ...extra } });
+const ranked = (db, n, rankings, extra = {}) => Object.assign(db.users[n], { minecraft_uuid: accountId(n + 1), tiers: { uuid: accountId(n + 1), source: 'mctiers', rankings: rankings.map(([kit, tier]) => ({ kit, tier, current: tier, peak: tier, retired: false })), synced_at: new Date().toISOString(), next_attempt_at: new Date(Date.now() + 9e6).toISOString(), error: null, ...extra } });
 test.describe('PvP tiers', () => {
-  test.use({ serverOptions: { env: { MCPVP_ENABLED: 'true', MCPVP_API_URL: 'http://127.0.0.1:1/{uuid}' }, change: (db) => { ranked(db, 0, [['sword', 'HT3'], ['crystal', 'HT1'], ['late-game', 'ST6']]); ranked(db, 1, [['sword', 'LT4']]); ranked(db, 4, [], {}); ranked(db, 5, [['crystal', 'LT5']], { error: 'down' }); } } });
+  test.use({ serverOptions: { env: { MCTIERS_ENABLED: 'true', MCTIERS_API_URL: 'http://127.0.0.1:1' }, change: (db) => { ranked(db, 0, [['sword', 'HT3'], ['vanilla', 'HT1'], ['axe', 'LT2']]); ranked(db, 1, [['sword', 'LT4']]); ranked(db, 4, [], {}); ranked(db, 5, [['vanilla', 'LT5']], { error: 'down' }); } } });
   test('badges show the right kit everywhere, with details by mouse and keyboard', async ({ page, server, signIn }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await signIn(0);
     await page.goto(`${server.base}/profile`);
     const badges = page.locator('#profile-tiers .tier-badge');
     await expect(badges).toHaveCount(3);
-    await expect(page.locator('#profile-tiers')).toContainText('Late Game');
-    await badges.nth(1).hover();
+    await expect(page.locator('#profile-tiers')).toContainText('Axe');
     const tip = page.locator('#tier-tip');
-    for (const text of ['Crystal', 'High Tier 1', 'Source: MCPVP', 'Last synced']) await expect(tip).toContainText(text);
+    await badges.first().hover();
+    for (const text of ['Vanilla', 'High Tier 1', 'Source: MCTiers', 'Last synced']) await expect(tip).toContainText(text);
     await tip.hover();
     await expect(tip).toBeVisible();
     await page.mouse.move(5, 5);
     await expect(tip).toBeHidden();
-    await badges.first().focus();
+    await badges.nth(1).focus();
     await expect(tip).toContainText('High Tier 3');
     await page.keyboard.press('Escape');
     await expect(tip).toBeHidden();
-    await expect(badges.first()).toHaveAccessibleName(/Sword\. High Tier 3\. Source: MCPVP\. Last synced/);
+    await expect(badges.nth(1)).toHaveAccessibleName(/Sword\. High Tier 3\. Source: MCTiers\. Last synced/);
     // Match room: the match's own kit, and an honest "Unranked".
     await page.goto(`${server.base}/matches/code4aa`);
-    await expect(page.locator('.fighter .tier-badge')).toHaveText(['Unranked', 'HT1']);
+    await expect(page.locator('.player-card .tier-badge')).toHaveText(['Unranked', 'HT1']);
     await page.goto(`${server.base}/matches`);
     await page.getByRole('button', { name: /Ongoing/ }).click();
     const mine = page.locator('.match-card', { hasText: 'RivalTest' });
@@ -357,7 +370,7 @@ test('admin security: events, history, and signing a player out', async ({ page,
   await expect(page.locator('#toast')).toContainText('1 session ended');
   expect((await server.as(3).get('/api/me')).status).toBe(401);
   await tab('Health');
-  await expect(page.locator('#admin-health')).toContainText('MCPVP has approved access');
+  await expect(page.locator('#admin-health')).toContainText('MCTIERS_ENABLED=false');
 });
 
 test('admin: switches turn parts of the site off and on, and only the owner sees the panel', async ({ page, browser, server, signIn }) => {
@@ -577,4 +590,66 @@ test('live updates: a balance change appears without reloading or polling', asyn
   // Only the fetch the change asked for; no timed polling while the stream is up.
   await page.waitForTimeout(16_000);
   expect(polls.filter((url) => url.endsWith('/api/me')).length).toBeLessThanOrEqual(2);
+});
+
+test('match page: header, cards, timeline, rules, spectator chat, and history all work from real data', async ({ page, server, signIn }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await signIn(5);
+  // Slate is not in code4aa (Pyre vs OwnerTest): a spectator.
+  await page.goto(`${server.base}/matches/code4aa`);
+  await expect(page.locator('.room-header h1')).toHaveText('1v1 Crystal PvP');
+  await expect(page.locator('#match-created')).toContainText('Created');
+  await expect(page.locator('.room-fact')).toHaveCount(8);
+  await expect(page.locator('.room-fact.is-server')).toContainText('mcpvp.club');
+  await expect(page.locator('.timeline-step')).toHaveCount(4);
+  await expect(page.locator('.timeline-step[aria-current="step"]')).toContainText('Match Started');
+  await expect(page.locator('.player-card')).toHaveCount(2);
+  await expect(page.locator('.player-card.is-creator small')).toHaveText('Creating player');
+  await expect(page.locator('#chat-spectator')).toHaveText('You are not participating in this match.');
+  await expect(page.locator('#chat-form')).toBeHidden();
+  await expect(page.locator('.chat-event').first()).toBeVisible();
+  await expect(page.locator('.message')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'I won' })).toHaveCount(0);
+  // Rules tabs and See More.
+  await page.getByRole('tab', { name: 'General' }).click();
+  await expect(page.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
+  const before = await page.locator('.rules-list li').count();
+  await page.locator('[data-rules-more]').click();
+  await expect(page.locator('.rules-list li')).not.toHaveCount(before);
+  // Collapsing the chat is remembered.
+  await page.locator('#chat-toggle').click();
+  await expect(page.locator('#chat-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await page.reload();
+  await expect(page.locator('#chat-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await page.locator('#chat-toggle').click();
+  // A player's name opens their profile, whose history opens the match again.
+  await page.locator('.player-card.is-opponent .player-name').click();
+  const dialog = page.locator('#statistics-dialog');
+  await expect(dialog.getByRole('heading', { name: 'OwnerTest' })).toBeVisible();
+  await dialog.getByRole('button', { name: 'View Matches' }).click();
+  await dialog.locator('.history-card', { hasText: 'Crystal PvP' }).first().locator('.history-link').click();
+  await expect(page).toHaveURL(/\/matches\/code/);
+  await expect(page.locator('.room-header h1')).toContainText('1v1');
+  const { violations } = await new AxeBuilder({ page }).include('#room').withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze();
+  expect(violations.map((v) => `${v.id} ${v.nodes[0].target} ${v.nodes[0].any[0]?.message || ''}`)).toEqual([]);
+});
+
+test('lobby: completed tab, player search, and names that open profiles instead of matches', async ({ page, server, signIn }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await signIn(0);
+  await page.goto(`${server.base}/matches`);
+  await page.getByRole('group', { name: 'Match status' }).getByRole('button', { name: 'Completed' }).click();
+  await expect(page.locator('.match-card.is-completed').first()).toBeVisible();
+  await page.locator('#match-search').fill('rival');
+  await expect(page.locator('.match-card.is-completed').first()).toContainText('RivalTest');
+  await page.locator('.match-card.is-completed .versus-name', { hasText: 'RivalTest' }).first().click();
+  await expect(page.locator('#statistics-dialog').getByRole('heading', { name: 'RivalTest' })).toBeVisible();
+  await expect(page).toHaveURL(`${server.base}/matches`);
+  await page.keyboard.press('Escape');
+  await page.locator('.match-card.is-completed').first().getByRole('link', { name: 'View match' }).click();
+  await expect(page).toHaveURL(/\/matches\/code/);
+  await page.goBack();
+  // The lobby comes back as it was left.
+  await expect(page.locator('#match-search')).toHaveValue('rival');
+  await expect(page.getByRole('group', { name: 'Match status' }).getByRole('button', { name: 'Completed' })).toHaveAttribute('aria-pressed', 'true');
 });

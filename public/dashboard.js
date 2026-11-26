@@ -13,7 +13,13 @@ registerPage('app', (page) => {
   let myMatches = [];
   let currentView = 'matches';
   const support = createSupportView(page);
-  const filters = { status: 'available', mode: 'all', region: 'all', sort: 'newest' };
+  // Filters are remembered for this tab, so coming back from a match finds the lobby as it was left.
+  const FILTERS_KEY = 'lobby-filters';
+  const filters = { status: 'available', mode: 'all', region: 'all', sort: 'newest', query: '' };
+  try { Object.assign(filters, JSON.parse(sessionStorage.getItem(FILTERS_KEY) || '{}')); } catch { /* Storage is optional. */ }
+  if (!['available', 'ongoing', 'completed'].includes(filters.status)) filters.status = 'available';
+  const saveFilters = () => { try { sessionStorage.setItem(FILTERS_KEY, JSON.stringify({ status: filters.status, region: filters.region, sort: filters.sort, query: filters.query })); } catch { /* Storage is optional. */ } };
+  const completed = { matches: [], page: 0, pages: 1, query: null, loading: false, request: 0 };
 
   /* ---------- Account data ---------- */
   const isVerified = () => Boolean(me.minecraft_verified && me.minecraft_username);
@@ -26,7 +32,7 @@ registerPage('app', (page) => {
     $('#profile-tags').innerHTML = playerTags(me.tags) + siteTierBadges(me.tiers);
     const wait = me.tiers_refresh_at ? `Refresh available ${new Date(me.tiers_refresh_at).toLocaleTimeString(undefined, { timeStyle: 'short' })}` : '';
     $('#profile-tiers').innerHTML = tiersPanel(me.tiers, ['not_verified', 'no_account_id'].includes(me.tiers.status) ? (me.tiers.status === 'not_verified' ? '<button class="btn btn-small btn-primary" type="button" data-verify>Verify Minecraft</button>' : '') : `<button class="btn btn-small" type="button" data-tiers-refresh ${wait ? 'disabled' : ''}>${icon('refresh')}${wait || 'Refresh'}</button>`);
-    $('#connection-minecraft-note').textContent = me.minecraft_name_hint ? `MCPVP lists this account as ${me.minecraft_name_hint}. If you renamed, update your name so payments reach you.` : '';
+    $('#connection-minecraft-note').textContent = me.minecraft_name_hint ? `MCTiers lists this account as ${me.minecraft_name_hint}. If you renamed, update your name so payments reach you.` : '';
     $('#field-discord').value = me.username;
     $('#field-id').value = me.discord_id;
     $('#field-minecraft').value = verified ? me.minecraft_username : '';
@@ -96,8 +102,10 @@ registerPage('app', (page) => {
   }
 
   /* ---------- Matches ---------- */
+  const playerNamed = (match, query) => !query || ['creator', 'opponent'].some((side) => [match[side], match[`${side}_minecraft_username`]].some((name) => name && name !== 'Hidden until ready' && String(name).toLowerCase().includes(query)));
   function applyFilters(matches) {
-    const visible = matches.filter((match) => (filters.mode === 'all' || (filters.mode === 'crystal') === isCrystal(match)) && (filters.region === 'all' || matchRegion(match) === filters.region));
+    const query = filters.query.trim().toLowerCase();
+    const visible = matches.filter((match) => (filters.mode === 'all' || (filters.mode === 'crystal') === isCrystal(match)) && (filters.region === 'all' || matchRegion(match) === filters.region) && (filters.status === 'completed' || playerNamed(match, query)));
     if (filters.sort === 'newest') return visible;
     return [...visible].sort((a, b) => (filters.sort === 'high' ? b.wager_amount - a.wager_amount : a.wager_amount - b.wager_amount));
   }
@@ -116,10 +124,23 @@ registerPage('app', (page) => {
       ${sniped ? `<div class="snipe-result">${snipeIcon}${tierBadge(match.creator_tier, { showEmpty: true })}<b>${escapeHtml(sniped.username)}</b><span class="num">${fullNumber(sniped.wins)}W ${fullNumber(sniped.losses)}L</span></div>` : ''}
       <footer>${match.is_creator ? `<a class="btn" href="${escapeHtml(matchHref(match))}">Open room</a>` : `<button class="btn btn-primary" type="button" data-join="${code}">Join match</button>${sniped || !me.features.snipes ? '' : `<button class="btn btn-icon" type="button" data-snipe="${code}" aria-label="Use a snipe to reveal this player" title="Use a snipe to reveal this player">${snipeIcon}</button>`}`}</footer></article>`;
   }
+  /** A player's name opens their profile; it is a separate button, never part of the match link. */
+  function versusName(match, side) {
+    const value = match[side];
+    if (value === 'Hidden until ready') return '<span class="muted">Hidden</span>';
+    const profile = match[`${side}_discord_id`];
+    return `<span class="versus-player">${tierBadge(match[`${side}_tier`])}${profile ? `<button class="versus-name" type="button" data-player="${escapeHtml(profile)}">${escapeHtml(value)}</button>` : `<span>${escapeHtml(value || 'Waiting')}</span>`}</span>`;
+  }
+  function completedCard(match) {
+    const score = match.final_score ? `<b class="num versus-score">${match.final_score.creator}–${match.final_score.opponent}</b>` : '<i>vs</i>';
+    const winner = (side) => (match.winner_side === side ? ' is-winner' : '');
+    return `<article class="match-card is-completed" data-key="${escapeHtml(match.match_code)}">${cardHead(match, `<span class="tag">${escapeHtml(timeAgo(match.settled_at || match.created_at))}</span>`)}<div class="versus"><span class="versus-side${winner('creator')}">${versusName(match, 'creator')}</span>${score}<span class="versus-side${winner('opponent')}">${versusName(match, 'opponent')}</span></div>${money(match)}
+      <div class="match-info"><div>${icon('trophy')}${escapeHtml(match.winner || 'Settled')} won</div></div>
+      <footer><a class="btn" href="${escapeHtml(matchHref(match))}">View match</a></footer></article>`;
+  }
   function ongoingCard(match) {
-    const hidden = 'Hidden until ready';
-    const name = (value, tier) => (value === hidden ? '<span class="muted">Hidden</span>' : `<span class="versus-player">${tierBadge(tier)}<span>${escapeHtml(value || 'Waiting')}</span></span>`);
-    return `<article class="match-card" data-key="${escapeHtml(match.match_code || match.id)}">${cardHead(match, statusTag(match))}<div class="versus">${name(match.creator, match.creator_tier)}<i>vs</i>${name(match.opponent, match.opponent_tier)}</div>${money(match)}
+    const name = (value, tier, side) => versusName(match, side);
+    return `<article class="match-card" data-key="${escapeHtml(match.match_code || match.id)}">${cardHead(match, statusTag(match))}<div class="versus">${name(match.creator, match.creator_tier, 'creator')}<i>vs</i>${name(match.opponent, match.opponent_tier, 'opponent')}</div>${money(match)}
       <div class="match-info"><div>${icon('flag')}${escapeHtml(matchTerms(match).label)}</div></div>
       <footer><a class="btn ${match.viewer_is_participant ? 'btn-primary' : ''}" href="${escapeHtml(matchHref(match))}">${match.viewer_is_participant ? 'Go to your match' : 'View match'}</a></footer></article>`;
   }
@@ -133,12 +154,15 @@ registerPage('app', (page) => {
     $('#available-count').textContent = openMatches.length || '';
     $('#ongoing-count').textContent = ongoingMatches.length || '';
     const open = filters.status === 'available';
-    const source = open ? openMatches : ongoingMatches;
+    const done = filters.status === 'completed';
+    if (done && completed.query !== filters.query.trim().toLowerCase()) { loadCompleted(true); return; }
+    const source = done ? completed.matches : open ? openMatches : ongoingMatches;
     const visible = applyFilters(source);
     let markup;
-    if (visible.length) markup = visible.map(open ? openCard : ongoingCard).join('');
-    else if (source.length) markup = emptyState('search', 'Nothing fits those filters', 'Try another mode or region.', '<button class="btn" type="button" data-clear-filters>Clear filters</button>');
-    else markup = open ? lobbyEmpty() : emptyState('swords', 'No matches in progress', 'Live duels appear here once two players are in a room.');
+    if (done && completed.loading && !completed.matches.length) markup = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
+    else if (visible.length) markup = visible.map(done ? completedCard : open ? openCard : ongoingCard).join('') + (done && completed.page < completed.pages ? `<div class="lobby-more"><button class="btn" type="button" data-more-completed>${completed.loading ? 'Loading…' : 'Show older matches'}</button></div>` : '');
+    else if (source.length || filters.query) markup = emptyState('search', 'Nothing fits those filters', filters.query ? 'No player by that name in these matches.' : 'Try another mode or region.', '<button class="btn" type="button" data-clear-filters>Clear filters</button>');
+    else markup = open ? lobbyEmpty() : done ? emptyState('trophy', 'No finished matches yet', 'Settled matches appear here with their results.') : emptyState('swords', 'No matches in progress', 'Live duels appear here once two players are in a room.');
     // Skipping identical markup keeps focus and hover stable between background refreshes.
     if (markup !== lastMatchMarkup || $('#match-list .skeleton')) {
       const before = new Set($$('#match-list .match-card').map((card) => card.dataset.key));
@@ -187,12 +211,34 @@ registerPage('app', (page) => {
     $('#rail-event').hidden = !event;
     if (event) $('#rail-event-body').innerHTML = `<a class="rail-row" href="/tournaments">${icon('trophy')}<span>${escapeHtml(event.name)}<small>${event.status === 'OPEN' ? `${event.registered_count} of ${event.max_players} registered` : 'In progress'}</small></span><b class="num is-money">${shortAmount(event.winner_prize)}</b></a>`;
   }
-  $$('[data-status]').forEach((button) => button.addEventListener('click', () => { filters.status = button.dataset.status; setPressed($$('[data-status]'), button); renderMatches(); }));
+  /** Finished matches come a page at a time from the server, which also does the player search. */
+  async function loadCompleted(reset = false) {
+    const query = filters.query.trim().toLowerCase();
+    if (reset) Object.assign(completed, { matches: [], page: 0, pages: 1, query });
+    const request = ++completed.request;
+    completed.loading = true;
+    if (reset) renderMatches();
+    try {
+      const result = await api(`/api/matches?status=completed&page=${completed.page + 1}${query ? `&q=${encodeURIComponent(query)}` : ''}`);
+      if (request !== completed.request) return;
+      completed.matches = [...completed.matches, ...result.matches.filter((match) => !completed.matches.some((item) => item.match_code === match.match_code))];
+      Object.assign(completed, { page: result.page, pages: result.pages });
+    } catch (error) { if (request === completed.request) toast(error.message, true); }
+    finally { if (request === completed.request) { completed.loading = false; renderMatches(); } }
+  }
+  setPressed($$('[data-status]'), $(`[data-status="${filters.status}"]`));
+  setPressed($$('[data-region]'), $(`[data-region="${filters.region}"]`));
+  $('#sort-matches').value = filters.sort;
+  $('#match-search').value = filters.query;
+  $$('[data-status]').forEach((button) => button.addEventListener('click', () => { filters.status = button.dataset.status; saveFilters(); setPressed($$('[data-status]'), button); renderMatches(); }));
+  let searchTimer = null;
+  $('#match-search').addEventListener('input', (event) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { filters.query = event.target.value.slice(0, 32); saveFilters(); renderMatches(); }, 220); });
+  page.on(document, 'click', (event) => { if (event.target.closest('[data-more-completed]') && !completed.loading) loadCompleted(); });
   $$('[data-mode]').forEach((button) => button.addEventListener('click', () => selectGame(button.dataset.mode)));
   function applyGame(game) { filters.mode = game; setPressed($$('[data-mode]'), $(`[data-mode="${game}"]`)); renderMatches(); }
   gameListeners.add(applyGame);
-  $$('[data-region]').forEach((button) => button.addEventListener('click', () => { filters.region = button.dataset.region; setPressed($$('[data-region]'), button); renderMatches(); }));
-  $('#sort-matches').addEventListener('change', (event) => { filters.sort = event.target.value; renderMatches(); });
+  $$('[data-region]').forEach((button) => button.addEventListener('click', () => { filters.region = button.dataset.region; saveFilters(); setPressed($$('[data-region]'), button); renderMatches(); }));
+  $('#sort-matches').addEventListener('change', (event) => { filters.sort = event.target.value; saveFilters(); renderMatches(); });
 
   async function joinMatch(code, button) {
     const match = openMatches.find((item) => (item.match_code || item.id) === code);
@@ -230,8 +276,8 @@ registerPage('app', (page) => {
       button.setAttribute('aria-pressed', String(String(draft[group.dataset.choice]) === button.value));
       if (group.dataset.choice === 'lead') button.disabled = Number(button.value) >= target;
     }));
-    const kit = draft.game === 'Crystal PvP' ? 'crystal' : 'sword';
-    const mine = me.tiers.rankings.find((item) => item.kit === kit) || { kit, label: kit === 'crystal' ? 'Crystal' : 'Sword', tier: null, status: me.tiers.status === 'ranked' ? 'unranked' : me.tiers.status, source: me.tiers.source, synced_at: me.tiers.synced_at, stale: me.tiers.stale };
+    const kit = draft.game === 'Crystal PvP' ? 'vanilla' : 'sword'; // MCTiers calls Crystal PvP "Vanilla".
+    const mine = me.tiers.rankings.find((item) => item.kit === kit) || { kit, label: kit === 'vanilla' ? 'Vanilla' : 'Sword', tier: null, status: me.tiers.status === 'ranked' ? 'unranked' : me.tiers.status, source: me.tiers.source, synced_at: me.tiers.synced_at, stale: me.tiers.stale };
     $('#create-tier').innerHTML = `${tierBadge(mine, { showEmpty: true })}<span>Your ${mine.label} tier: <b>${escapeHtml(mine.tier ? mine.name : TIER_STATES[mine.status])}</b></span>`;
     const theirs = target - draft.lead;
     $('#lead-help').textContent = draft.lead ? `Your opponent needs ${theirs} round${theirs === 1 ? '' : 's'}. You need ${target}.` : `Both players start level and need ${target} round${target === 1 ? '' : 's'}.`;
@@ -337,22 +383,20 @@ registerPage('app', (page) => {
       }).join('')}</tbody></table></div>` : emptyState('card', 'No transactions yet', 'Deposits, withdrawals, and match results will be listed here.', '<a class="btn" href="/wallet">Open your wallet</a>');
     } catch (error) { box.innerHTML = `<div class="notice notice-bad">${icon('alert')}<span>${escapeHtml(error.message)}</span></div>`; }
   }
-  function renderProfileMatches() {
+  let historyPage = 1;
+  let historyRequest = 0;
+  async function renderProfileMatches() {
     const box = $('#profile-matches');
-    if (!myMatches.length) { box.innerHTML = emptyState('swords', 'No matches yet', 'Your duels and their results will be listed here.', '<a class="btn btn-primary" href="/matches">Browse matches</a>'); return; }
-    box.innerHTML = `<div class="form-card table-wrap"><table><thead><tr><th>Match</th><th class="col-optional">Date</th><th>Opponent</th><th class="right col-optional">Entry</th><th class="right">Result</th></tr></thead><tbody>${myMatches.map((match) => {
-      const opponent = match.is_creator ? match.opponent : match.creator;
-      const won = match.status === 'COMPLETED' && match.winner_id === me.id;
-      const gain = money0(match, won);
-    const opponentTier = match.is_creator ? match.opponent_tier : match.creator_tier;
-      const result = match.status === 'COMPLETED' ? `<span class="${won ? 'result-win' : 'result-loss'} num">${won ? 'Won' : 'Lost'}${gain}</span>` : statusTag(match);
-      return `<tr><td><a class="text-link" href="${escapeHtml(matchHref(match))}">${modeName(match)}</a> <span class="muted">${matchRegion(match)}</span></td><td class="col-optional muted">${escapeHtml(new Date(match.settled_at || match.cancelled_at || match.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }))}</td><td>${opponent === 'Hidden until ready' || !opponent ? '<span class="muted">–</span>' : `<span class="versus-player">${tierBadge(opponentTier)}<span>${escapeHtml(opponent)}</span></span>`}</td><td class="right num col-optional">${match.tournament_id ? 'Free' : shortAmount(match.wager_amount)}</td><td class="right">${result}</td></tr>`;
-    }).join('')}</tbody></table></div>`;
+    const request = ++historyRequest;
+    if (!box.querySelector('.history-list')) box.innerHTML = skeletons(3);
+    try {
+      const history = await api(`/api/players/me/matches?page=${historyPage}`);
+      if (request !== historyRequest) return;
+      box.innerHTML = history.matches.length ? `<ul class="history-list">${history.matches.map((match) => historyCard(match, { own: true })).join('')}</ul>${historyPager(history.page, history.pages)}` : emptyState('swords', 'No matches yet', 'Your duels and their results will be listed here.', '<a class="btn btn-primary" href="/matches">Browse matches</a>');
+    } catch (error) { if (request === historyRequest) box.innerHTML = `<div class="notice notice-bad">${icon('alert')}<span>${escapeHtml(error.message)}</span></div>`; }
   }
-  function money0(match, won) {
-    if (!match.wager_amount) return '';
-    return won ? ` +${shortAmount(Number(match.payout_amount || 0) - match.wager_amount)}` : ` −${shortAmount(match.wager_amount)}`;
-  }
+  page.on(document, 'click', (event) => { const button = event.target.closest('#profile-matches [data-history-page]'); if (button) { historyPage = Number(button.dataset.historyPage); renderProfileMatches().then(() => $('#profile-matches .history-link')?.focus()); } });
+  document.addEventListener('statistics-changed', () => { if (location.pathname === '/profile/matches') renderProfileMatches(); });
 
   /* ---------- Leaderboard ---------- */
   const board = { sort: 'wins', period: 'all' };
@@ -881,7 +925,7 @@ registerPage('app', (page) => {
     else if (hit('[data-tiers-refresh]')) refreshTiers(hit('[data-tiers-refresh]'));
     else if (hit('[data-disconnect]')) disconnectMinecraft(hit('[data-disconnect]'));
     else if ((button = hit('[data-open-tab]'))) $(`[data-admin-tab="${button.dataset.openTab}"]`).click();
-    else if (hit('[data-clear-filters]')) { filters.region = 'all'; setPressed($$('[data-region]'), $('[data-region="all"]')); selectGame('all'); }
+    else if (hit('[data-clear-filters]')) { filters.region = 'all'; filters.query = ''; $('#match-search').value = ''; saveFilters(); setPressed($$('[data-region]'), $('[data-region="all"]')); selectGame('all'); }
     else if (hit('[data-wallet-retry]')) openWallet();
     else if ((button = hit('[data-tournament]'))) tournamentAction(button);
     else if ((button = hit('[data-resolve]'))) resolveMatch(button);

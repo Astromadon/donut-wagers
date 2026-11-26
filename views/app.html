@@ -6,9 +6,10 @@
           <div id="onboarding" class="onboarding panel" hidden></div>
           <div id="announcement-feed" class="announcements" {{announcementsHidden}}>{{announcements}}</div>
           <div class="toolbar">
-            <div class="segmented" role="group" aria-label="Match status"><button type="button" data-status="available" aria-pressed="true">Open <b id="available-count" class="num"></b></button><button type="button" data-status="ongoing" aria-pressed="false">Ongoing <b id="ongoing-count" class="num"></b></button></div>
+            <div class="segmented" role="group" aria-label="Match status"><button type="button" data-status="available" aria-pressed="true">Open <b id="available-count" class="num"></b></button><button type="button" data-status="ongoing" aria-pressed="false">Ongoing <b id="ongoing-count" class="num"></b></button><button type="button" data-status="completed" aria-pressed="false">Completed</button></div>
             <div class="segmented" role="group" aria-label="Game mode"><button type="button" data-mode="all" aria-pressed="true">All</button><button type="button" data-mode="crystal" aria-pressed="false">Crystal</button><button type="button" data-mode="sword" aria-pressed="false">Sword</button></div>
             <div class="segmented" role="group" aria-label="Region"><button type="button" data-region="all" aria-pressed="true">All</button><button type="button" data-region="EU" aria-pressed="false">EU</button><button type="button" data-region="NAE" aria-pressed="false">NAE</button></div>
+            <label class="lobby-search"><span class="sr-only">Search players in matches</span><svg class="icon" aria-hidden="true"><use href="/icons.svg#search"/></svg><input id="match-search" class="input" type="search" maxlength="32" placeholder="Player" autocomplete="off"></label>
             <select id="sort-matches" class="input" aria-label="Sort matches"><option value="newest">Newest first</option><option value="high">Highest entry</option><option value="low">Lowest entry</option></select>
           </div>
           <div class="lobby"><div id="match-list" class="match-grid" aria-live="polite"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>

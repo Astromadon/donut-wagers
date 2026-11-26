@@ -114,7 +114,8 @@ Third-party assets, all stored locally: Inter (SIL OFL 1.1, via @fontsource-vari
 - [Configuration](docs/CONFIGURATION.md): every variable
 - [Deployment](docs/DEPLOYMENT.md): first deployment, data migration, going back
 - [Operations](docs/OPERATIONS.md): backup, recovery, monitoring, incidents, capacity
-- [PvP tiers](docs/TIERS.md): MCPVP integration, off until approved
+- [PvP tiers](docs/TIERS.md): MCTiers integration
+- [Match pages](docs/MATCHES.md): match page, history, spectators, rematch, data
 - [AI Support](docs/AI_SUPPORT.md): the support page, turning AI answers on, limits, privacy
 - [Security](docs/SECURITY.md) and [Testing](docs/TESTING.md)
 - [Production readiness report](docs/PRODUCTION_READINESS.md) and [launch checklist](docs/LAUNCH_CHECKLIST.md)

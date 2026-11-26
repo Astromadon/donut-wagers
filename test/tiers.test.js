@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { withServer } = require('./support/harness');
-const { startMcpvpStub } = require('./support/mcpvp-stub');
-const { createMcpvpProvider, createTierSync, mergeResult, publicTiers, tierForKit, tierName, parseRankings } = require('../lib/tiers');
+const { startMctiersStub } = require('./support/mctiers-stub');
+const { createMctiersProvider, createTierSync, mergeResult, publicTiers, tierForKit, tierName, tierCode, parseRankings } = require('../lib/tiers');
 const { loadConfig } = require('../lib/config');
 const { checkIntegrity } = require('../lib/integrity');
 const { normalizeDb } = require('../server');
@@ -10,82 +10,98 @@ const { normalizeDb } = require('../server');
 const id = (n) => `0000000${n}-0000-4000-8000-00000000000${n}`;
 const HOUR = 3_600_000;
 const answer = (body, { status = 200, headers = {} } = {}) => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status, headers });
-const provider = (fetchImpl, extra = {}) => createMcpvpProvider({ url: 'https://api.test/{uuid}', enabled: true, refreshMs: 12 * HOUR, fetchImpl, pause: async () => undefined, ...extra });
+const provider = (fetchImpl, extra = {}) => createMctiersProvider({ url: 'https://api.test/v2', fetchImpl, ...extra });
+const rank = (tier, pos, extra = {}) => ({ tier, pos, peak_tier: tier, peak_pos: pos, attained: 1_790_000_000, retired: false, ...extra });
 const until = async (check, ms = 4000) => { const end = Date.now() + ms; for (;;) { const value = await check(); if (value) return value; if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 25)); } };
 
-test('tiers: formats are kept as sent, and unknown ones are never guessed', () => {
-  assert.equal(tierName('HT3'), 'High Tier 3');
-  assert.equal(tierName('MT2'), 'Mid Tier 2');
-  assert.equal(tierName('LT10'), 'Low Tier 10');
-  assert.equal(tierName('ST6'), 'ST6');
-  assert.deepEqual(parseRankings({ kitRanks: { sword: 'lt4', crystal: 'HT1', 'new-kit': 'ST6', bad: '', worse: null, '<b>': 'HT1', evil: '<script>', nested: {} }, kitRetired: { crystal: true } }),
-    [{ kit: 'sword', tier: 'LT4', retired: false }, { kit: 'crystal', tier: 'HT1', retired: true }, { kit: 'new-kit', tier: 'ST6', retired: false }]);
-  for (const bad of [{}, { kitRanks: [] }, { kitRanks: 'HT1' }]) assert.throws(() => parseRankings(bad), /unknown format/);
+test('tiers: MCTiers rankings are read exactly as documented, and nothing else is guessed', () => {
+  assert.equal(tierCode(3, 0), 'HT3');
+  assert.equal(tierCode(3, 1), 'LT3');
+  for (const [tier, pos] of [[0, 0], [6, 1], [2, 2], ['2', 0], [2.5, 1], [null, 0]]) assert.equal(tierCode(tier, pos), null);
+  assert.equal(tierName('HT1'), 'High Tier 1');
+  assert.equal(tierName('LT5'), 'Low Tier 5');
+  const parsed = parseRankings({
+    sword: rank(4, 1), vanilla: rank(3, 0, { peak_tier: 2, peak_pos: 0 }), axe: rank(2, 1, { peak_tier: 1, peak_pos: 0, retired: true }),
+    nethop: rank(5, 0, { peak_tier: null, peak_pos: null }), 'new_mode': rank(1, 1),
+    bad: { tier: 9, pos: 0 }, worse: null, '<b>': rank(1, 0), list: [], text: 'HT1',
+  });
+  assert.deepEqual(parsed.map((item) => [item.kit, item.tier, item.current, item.peak, item.retired]), [
+    ['sword', 'LT4', 'LT4', 'LT4', false], ['vanilla', 'HT3', 'HT3', 'HT2', false], ['axe', 'HT1', 'LT2', 'HT1', true], ['nethop', 'HT5', 'HT5', null, false], ['new_mode', 'LT1', 'LT1', 'LT1', false],
+  ]);
+  assert.equal(parsed[0].attained, new Date(1_790_000_000_000).toISOString());
+  for (const bad of [null, [], 'HT1', 5]) assert.throws(() => parseRankings(bad), /unknown format/);
 });
 
-test('tiers: off until approved, and only over https', () => {
-  const off = (options) => createMcpvpProvider({ refreshMs: HOUR, ...options }).reason;
-  assert.match(off({ url: 'https://x.test/{uuid}' }), /MCPVP_ENABLED/);
-  assert.match(off({ url: 'https://x.test/players', enabled: true }), /uuid/);
-  assert.match(off({ url: 'http://x.test/{uuid}', enabled: true }), /https/);
-  assert.match(off({ url: 'file:///etc/{uuid}', enabled: true }), /https/);
-  assert.equal(off({ url: 'https://x.test/{uuid}', enabled: true }), null);
-  assert.equal(loadConfig({}).tiers.enabled, false);
-  assert.ok(loadConfig({ MCPVP_REFRESH_HOURS: '0.1' }).errors.length);
+test('tiers: on by default over https, configurable, and refused over plain http in production', () => {
+  assert.equal(provider(async () => answer({})).reason, null);
+  assert.match(createMctiersProvider({ enabled: false }).reason, /MCTIERS_ENABLED/);
+  assert.match(createMctiersProvider({ url: 'http://x.test/v2' }).reason, /https/);
+  assert.match(createMctiersProvider({ url: 'file:///etc' }).reason, /https/);
+  assert.equal(createMctiersProvider({ url: 'http://127.0.0.1:1', allowHttp: true }).reason, null);
+  const config = loadConfig({});
+  assert.deepEqual([config.tiers.enabled, config.tiers.url], [true, 'https://mctiers.net/api/v2']);
+  assert.equal(loadConfig({ MCTIERS_ENABLED: 'false' }).tiers.enabled, false);
+  assert.ok(loadConfig({ MCTIERS_REFRESH_HOURS: '0.1' }).errors.length);
+  assert.ok(loadConfig({ NODE_ENV: 'production', MCTIERS_API_URL: 'http://evil.test' }).errors.some((error) => /MCTIERS_API_URL/.test(error)));
 });
 
-test('tiers: a lookup is tied to the account id and fails safely', async () => {
-  const good = { uuid: id(1), name: 'Nova', kitRanks: { sword: 'LT4' } };
+test('tiers: a lookup is tied to the account id, shared, and fails safely', async () => {
+  const good = { uuid: id(1), name: 'Nova', region: 'NA', rankings: { sword: rank(4, 1) } };
   let seen = null;
-  const ok = await provider(async (url, options) => { seen = { url, options }; return answer(good); }, { apiKey: 'k' }).lookup(id(1));
-  assert.deepEqual(ok.rankings, [{ kit: 'sword', tier: 'LT4', retired: false }]);
-  assert.equal(seen.url, `https://api.test/${id(1)}`);
+  let calls = 0;
+  const shared = provider(async (url, options) => { calls += 1; seen = { url, options }; await new Promise((r) => setTimeout(r, 20)); return answer(url.endsWith('/mode/list') ? { sword: { title: 'Sword' } } : good); });
+  const [ok, twin] = await Promise.all([shared.lookup(id(1)), shared.lookup(id(1).toUpperCase())]);
+  assert.equal(ok, twin, 'two lookups for one account share a request');
+  assert.deepEqual(ok.rankings.map((item) => item.tier), ['LT4']);
+  assert.deepEqual([ok.name, ok.region], ['Nova', 'NA']);
   assert.equal(seen.options.redirect, 'error');
-  assert.equal(seen.options.headers.Authorization, 'Bearer k');
-  assert.deepEqual((await provider(async () => answer('', { status: 404 })).lookup(id(1))).rankings, []);
+  assert.ok(seen.options.signal, 'every request has a timeout');
+  assert.ok(calls <= 3);
+  assert.deepEqual((await provider(async () => answer('', { status: 404 })).lookup(id(1))).rankings, [], '404 means not on MCTiers: unranked');
   await assert.rejects(provider(async () => answer({ ...good, uuid: id(2) })).lookup(id(1)), /different account/);
+  await assert.rejects(provider(async () => answer({ ...good, rankings: 'HT1' })).lookup(id(1)), /unknown format/);
   for (const uuid of [null, 'Nova', '../../admin', '00000000-0000-0000-0009-01f5c8a2b3c4']) await assert.rejects(provider(async () => answer(good)).lookup(uuid), /account ID/);
   await assert.rejects(provider(async () => answer('not json')).lookup(id(1)), /could not be read/);
-  await assert.rejects(provider(async () => answer(`"${'x'.repeat(5_100_000)}"`)).lookup(id(1)), /could not be read/);
+  await assert.rejects(provider(async () => answer(`"${'x'.repeat(1_100_000)}"`)).lookup(id(1)), /could not be read/);
   await assert.rejects(provider(async () => { throw new TypeError('redirect'); }).lookup(id(1)), /could not be reached/);
   await assert.rejects(provider(async () => answer('', { status: 429, headers: { 'Retry-After': '120' } })).lookup(id(1)), (error) => error.retryAfterMs === 120_000);
+  await assert.rejects(provider(async () => answer({ code: 'error.bad_request' }, { status: 400 })).lookup(id(1)), (error) => error.onePlayer);
 });
 
-test('tiers: a list is read to its end, once per refresh, and a partial one is never trusted', async () => {
-  let calls = 0;
-  const pages = { 0: { players: [{ uuid: id(1), kitRanks: { crystal: 'HT1' } }], hasMore: true, nextOffset: 100 }, 100: { players: [{ uuid: id(2).replaceAll('-', ''), kitRanks: { sword: 'LT3' } }], hasMore: false } };
-  const list = (fetchImpl, extra) => provider(fetchImpl, { url: 'https://api.test/list?offset={offset}', ...extra });
-  const feed = list(async (url) => { calls += 1; return answer(pages[new URL(url).searchParams.get('offset')]); });
-  const [first, second, missing] = await Promise.all([feed.lookup(id(1)), feed.lookup(id(2)), feed.lookup(id(3))]);
-  assert.equal(first.rankings[0].tier, 'HT1');
-  assert.equal(second.rankings[0].tier, 'LT3');
-  assert.deepEqual(missing.rankings, []);
-  assert.equal(calls, 2);
-  await assert.rejects(list(async () => answer({ players: [], hasMore: true, nextOffset: 0 })).lookup(id(1)), /did not continue/);
-  let n = 0;
-  await assert.rejects(list(async () => answer({ players: [], hasMore: true, nextOffset: (n += 1) }), { maxPages: 3 }).lookup(id(1)), /longer/);
+test('tiers: gamemode titles come from /mode/list, and an old list survives an outage', async () => {
+  let now = 0;
+  let up = true;
+  const source = provider(async () => (up ? answer({ vanilla: { title: 'Vanilla' }, sword: { title: 'Sword' }, brandnew: { title: 'Brand New' }, '<x>': { title: 'bad' } }) : answer('', { status: 500 })), { now: () => now });
+  const modes = await source.loadModes();
+  assert.equal(modes.brandnew, 'Brand New');
+  assert.equal(modes['<x>'], undefined);
+  up = false;
+  now += 7 * HOUR;
+  assert.equal((await source.loadModes()).brandnew, 'Brand New');
 });
 
-test('tiers: backoff grows, respects the provider, and one bad record holds nobody up', async () => {
+test('tiers: backoff grows, respects MCTiers, spaces requests, and one bad record holds nobody up', async () => {
   let now = 1_000_000_000_000;
   const users = [1, 2].map((n) => ({ id: `u${n}`, minecraft_verified: true, minecraft_uuid: id(n), tiers: null }));
   let behave = () => { throw new Error('unset'); };
   let calls = 0;
-  const source = createMcpvpProvider({ url: 'https://api.test/{uuid}', enabled: true, refreshMs: 12 * HOUR, now: () => now, fetchImpl: async (url) => { calls += 1; return behave(url); } });
-  const sync = createTierSync({ provider: source, refreshMs: 12 * HOUR, now: () => now, random: () => 0.5, readUsers: async () => users, storeResult: async (userId, result) => { const user = users.find((item) => item.id === userId); user.tiers = mergeResult(user.tiers, result); } });
+  const pauses = [];
+  const source = createMctiersProvider({ url: 'https://api.test/v2', now: () => now, fetchImpl: async (url) => { if (url.endsWith('/mode/list')) return answer({}); calls += 1; return behave(url); } });
+  const sync = createTierSync({ provider: source, refreshMs: 12 * HOUR, now: () => now, random: () => 0.5, pause: async (ms) => { pauses.push(ms); }, readUsers: async () => users, storeResult: async (userId, result) => { const user = users.find((item) => item.id === userId); user.tiers = mergeResult(user.tiers, result); } });
   const gaps = [];
   behave = () => answer('', { status: 500 });
-  for (let i = 0; i < 4; i += 1) { const before = calls; await sync.tick(); assert.equal(calls, before + 1, 'one request, then it waits'); gaps.push(new Date(sync.status().paused_until) - now); await sync.tick(); assert.equal(calls, before + 1); now = Date.parse(sync.status().paused_until) + HOUR * 7; }
+  for (let i = 0; i < 4; i += 1) { const before = calls; await sync.tick(); assert.equal(calls, before + 1, 'one request, then it waits'); gaps.push(new Date(sync.status().paused_until) - now); await sync.tick(); assert.equal(calls, before + 1); now = Date.parse(sync.status().paused_until) + 1; }
   assert.deepEqual(gaps.map((gap) => gap / 60_000), [1, 2, 4, 8]);
   behave = () => answer('', { status: 429, headers: { 'Retry-After': '7200' } });
   await sync.tick();
   assert.equal(new Date(sync.status().paused_until) - now, 2 * HOUR);
   now += 24 * HOUR;
-  behave = (url) => (url.includes(id(1)) ? answer({ uuid: id(1), kitRanks: 'broken' }) : answer({ uuid: id(2), kitRanks: { sword: 'HT2' } }));
+  behave = (url) => (url.includes(id(1)) ? answer({ uuid: id(1), rankings: 'broken' }) : answer({ uuid: id(2), rankings: { sword: rank(2, 0) } }));
   await sync.tick();
   assert.equal(users[1].tiers.rankings[0].tier, 'HT2');
   assert.match(users[0].tiers.error, /unknown format/);
   assert.equal(sync.status().paused_until, null);
+  assert.ok(pauses.includes(1000), 'requests are at least a second apart');
   const quiet = calls;
   now += 11 * HOUR;
   users[0].tiers.next_attempt_at = new Date(now + HOUR).toISOString();
@@ -95,29 +111,41 @@ test('tiers: backoff grows, respects the provider, and one bad record holds nobo
   behave = () => answer('', { status: 503 });
   await sync.tick();
   assert.equal(users[1].tiers.rankings[0].tier, 'HT2', 'a failure keeps what was known');
+  // Rankings from the old provider are fetched again straight away.
+  users[1].tiers = { ...users[1].tiers, source: 'mcpvp', next_attempt_at: new Date(now + 10 * HOUR).toISOString() };
+  now += 7 * HOUR;
+  behave = () => answer({ uuid: id(2), rankings: { sword: rank(3, 1) } });
+  await sync.tick();
+  assert.equal(users[1].tiers.source, 'mctiers');
 });
 
-test('tiers: ranked, unranked, unavailable, stale, and other accounts are told apart', () => {
+test('tiers: ranked, unranked, unavailable, stale, retired and other accounts are told apart', () => {
   const now = Date.now();
   const options = { refreshMs: 12 * HOUR, enabled: true };
-  const user = (tiers, extra = {}) => ({ minecraft_verified: true, minecraft_uuid: id(1), tiers: tiers && { uuid: id(1), source: 'mcpvp', rankings: [], synced_at: new Date(now).toISOString(), error: null, ...tiers }, ...extra });
+  const user = (tiers, extra = {}) => ({ minecraft_verified: true, minecraft_uuid: id(1), tiers: tiers && { uuid: id(1), source: 'mctiers', rankings: [], synced_at: new Date(now).toISOString(), error: null, ...tiers }, ...extra });
   const status = (value, o = options) => publicTiers(value, o, now).status;
   assert.equal(status(user(null)), 'pending');
   assert.equal(status(user(null), { ...options, enabled: false }), 'unavailable');
   assert.equal(status(user({ synced_at: null, error: 'down' })), 'unavailable');
   assert.equal(status(user({})), 'unranked');
+  assert.equal(status(user({ source: 'mcpvp' })), 'pending', 'old provider data is not shown');
   assert.equal(status(user({}, { minecraft_verified: false })), 'not_verified');
   assert.equal(status(user({}, { minecraft_uuid: null })), 'no_account_id');
-  const ranked = user({ rankings: [{ kit: 'sword', tier: 'LT4' }, { kit: 'crystal', tier: 'HT1' }] });
-  assert.equal(publicTiers(ranked, options, now).stale, false);
+  const ranked = user({ rankings: [{ kit: 'sword', tier: 'LT4', current: 'LT4', peak: 'HT3' }, { kit: 'vanilla', tier: 'HT3' }, { kit: 'axe', tier: 'LT2' }, { kit: 'mace', tier: 'HT4', current: 'LT5', peak: 'HT4', retired: true }, { kit: 'evil', tier: '<b>' }] });
+  const shown = publicTiers(ranked, options, now);
+  assert.deepEqual(shown.rankings.map((item) => item.kit), ['vanilla', 'sword', 'axe', 'mace']);
+  assert.equal(shown.stale, false);
   assert.equal(publicTiers({ ...ranked, tiers: { ...ranked.tiers, error: 'down' } }, options, now).stale, true);
   assert.equal(publicTiers(ranked, options, now + 25 * HOUR).stale, true);
+  // Each gamemode shows its own tier, never the best one.
   assert.equal(tierForKit(ranked, 'sword', options, now).tier, 'LT4');
-  assert.equal(tierForKit(ranked, 'crystal', options, now).tier, 'HT1');
-  const mace = tierForKit(ranked, 'mace', options, now);
-  assert.deepEqual([mace.tier, mace.status], [null, 'unranked'], 'another kit is never used instead');
+  assert.equal(tierForKit(ranked, 'sword', options, now).peak, 'HT3');
+  assert.equal(tierForKit(ranked, 'vanilla', options, now).tier, 'HT3');
+  assert.deepEqual([tierForKit(ranked, 'mace', options, now).tier, tierForKit(ranked, 'mace', options, now).retired], ['HT4', true]);
+  const pot = tierForKit(ranked, 'pot', options, now);
+  assert.deepEqual([pot.tier, pot.status], [null, 'unranked'], 'another gamemode is never used instead');
   assert.equal(status({ ...ranked, minecraft_uuid: id(2) }), 'pending', 'rankings do not follow a player to another account');
-  assert.deepEqual(mergeResult(ranked.tiers, { uuid: id(2), source: 'mcpvp', error: 'down', attempted_at: 'x', next_attempt_at: 'x', failures: 1 }).rankings, []);
+  assert.deepEqual(mergeResult(ranked.tiers, { uuid: id(2), source: 'mctiers', error: 'down', attempted_at: 'x', next_attempt_at: 'x', failures: 1 }).rankings, []);
 });
 
 const verify = async (server, n, name, uuid) => {
@@ -126,23 +154,24 @@ const verify = async (server, n, name, uuid) => {
   return server.bot('/api/minecraft/verification/complete', { code: created.body.code, minecraftUsername: name, ...(uuid ? { minecraftUuid: uuid } : {}) });
 };
 async function withStub(work, { change = () => undefined, env = {} } = {}) {
-  const stub = await startMcpvpStub();
-  try { await withServer({ change, env: { MCPVP_ENABLED: 'true', MCPVP_API_URL: stub.url, MCPVP_API_KEY: 'stub-key', ...env } }, (server) => work(server, stub)); } finally { await stub.stop(); }
+  const stub = await startMctiersStub();
+  try { await withServer({ change, env: { MCTIERS_ENABLED: 'true', MCTIERS_API_URL: stub.url, ...env } }, (server) => work(server, stub)); } finally { await stub.stop(); }
 }
 
-test('tiers: verifying fetches real rankings for that account, kit by kit, and players cannot submit their own', () => withStub(async (server, stub) => {
-  stub.set(id(7), { sword: 'LT4', crystal: 'HT1', 'diamond-smp': 'ST6' }, { name: 'EmberMC', kitRetired: { sword: true } });
+test('tiers: verifying fetches that account’s MCTiers rankings, match by match gamemode, and players cannot submit their own', () => withStub(async (server, stub) => {
+  stub.set(id(7), { sword: 'LT4', vanilla: { tier: 'LT2', peak: 'HT3' }, axe: 'LT2', mace: { tier: 'LT5', peak: 'HT4', retired: true } }, { name: 'EmberMC' });
   assert.equal((await verify(server, 7, 'EmberMC', id(7))).status, 200);
   const tiers = await until(async () => { const { body } = await server.as(7).get('/api/me'); return body.tiers.status === 'ranked' && body.tiers; });
-  assert.deepEqual(tiers.rankings.map((item) => [item.kit, item.tier, item.name, item.retired, item.source]), [['sword', 'LT4', 'Low Tier 4', true, 'MCPVP'], ['crystal', 'HT1', 'High Tier 1', false, 'MCPVP'], ['diamond-smp', 'ST6', 'ST6', false, 'MCPVP']]);
-  assert.equal(stub.state.authorization, 'Bearer stub-key');
-  assert.ok(!JSON.stringify((await server.as(7).get('/api/me')).body).includes('stub-key'));
+  assert.deepEqual(tiers.rankings.map((item) => [item.kit, item.label, item.tier, item.retired, item.source]), [['vanilla', 'Vanilla', 'LT2', false, 'MCTiers'], ['sword', 'Sword', 'LT4', false, 'MCTiers'], ['axe', 'Axe', 'LT2', false, 'MCTiers'], ['mace', 'Mace', 'HT4', true, 'MCTiers']]);
+  assert.equal(tiers.rankings[0].peak, 'HT3');
+  assert.ok(stub.state.paths.includes(`/profile/${id(7)}`), 'looked up by account id, not by name');
+  assert.ok(!stub.state.paths.some((path) => path.includes('by-name')));
   assert.equal(server.stored().users[7].tiers.uuid, id(7));
 
-  // Matches show the ranking for their own kit only.
+  // Matches show the ranking for their own gamemode only.
   server.edit((db) => { db.users[7].balance = 50e6; db.users[7].eligibility_confirmed_at = new Date().toISOString(); db.users[7].eligibility_minimum_age = 18; });
   const make = async (mode) => (await server.as(7).post('/api/matches', { wager_amount: 1e6, game_mode: `${mode} · 1v1 · EU`, rules: 'First to 2, lead 0' })).body;
-  assert.equal((await make('Crystal PvP')).creator_tier.tier, 'HT1');
+  assert.equal((await make('Crystal PvP')).creator_tier.tier, 'LT2');
   const sword = await make('Sword Duel');
   assert.equal(sword.creator_tier.tier, 'LT4');
   const listed = (await server.as(4).get('/api/matches')).body.find((item) => item.match_code === sword.match_code);
@@ -153,7 +182,7 @@ test('tiers: verifying fetches real rankings for that account, kit by kit, and p
 }));
 
 test('tiers: downtime keeps old rankings marked stale; refresh requests are limited', () => withStub(async (server, stub) => {
-  stub.set(id(3), { crystal: 'HT2' });
+  stub.set(id(3), { vanilla: 'HT2' });
   server.edit((db) => { db.users[3].minecraft_uuid = id(3); db.minecraft_accounts.find((a) => a.user_id === 'u3').minecraft_uuid = id(3); });
   assert.equal((await server.as(3).post('/api/me/tiers/refresh')).status, 202);
   await until(async () => (await server.as(3).get('/api/me')).body.tiers.status === 'ranked');
@@ -168,17 +197,18 @@ test('tiers: downtime keeps old rankings marked stale; refresh requests are limi
   assert.equal(stale.rankings[0].tier, 'HT2');
   const health = (await server.as(0).get('/api/admin/metrics')).body.tiers;
   assert.match(health.last_error, /500/);
+  assert.equal(health.provider, 'MCTiers');
   assert.ok(health.paused_until);
   const failures = (await server.as(0).get('/api/admin/security')).body.sync_failures;
   assert.equal(failures[0].username, 'Kestrel');
   assert.ok(server.stored().audit_logs.some((entry) => entry.action === 'tiers_refresh_requested' && entry.user_id === 'u0' && entry.details.target_user_id === 'u3'));
 }));
 
-test('tiers: unranked is not unavailable, changed and removed rankings follow the provider', () => withStub(async (server, stub) => {
+test('tiers: unranked is not unavailable, changed and removed rankings follow MCTiers', () => withStub(async (server, stub) => {
   server.edit((db) => { db.users[3].minecraft_uuid = id(3); });
   await server.as(3).post('/api/me/tiers/refresh');
   await until(async () => (await server.as(3).get('/api/me')).body.tiers.status === 'unranked');
-  stub.set(id(3), { sword: 'LT5', crystal: 'LT5' });
+  stub.set(id(3), { sword: 'LT5', vanilla: 'LT5' });
   await server.as(0).post('/api/admin/players/900000000000000003/tiers/refresh');
   await until(async () => (await server.as(3).get('/api/me')).body.tiers.rankings.length === 2);
   stub.set(id(3), { sword: 'HT5' });
@@ -192,7 +222,7 @@ test('tiers: unranked is not unavailable, changed and removed rankings follow th
   assert.equal(server.stored().users[3].tiers.rankings[0].tier, 'HT5');
 }));
 
-test('tiers: switched off by default', () => withServer({}, async (server) => {
+test('tiers: switched off in this test setup unless asked for', () => withServer({}, async (server) => {
   assert.equal((await server.as(3).get('/api/me')).body.tiers.status, 'no_account_id');
   assert.equal((await server.as(3).post('/api/me/tiers/refresh')).status, 503);
   assert.equal((await server.as(0).get('/api/admin/metrics')).body.tiers.enabled, false);

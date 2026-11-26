@@ -1,46 +1,43 @@
-# PvP tiers
+# PvP tiers (MCTiers)
 
-Badges show a player's MCPVP ranking for one kit, read on the server for their verified Minecraft account ID. Nothing in the browser can set a ranking.
+Badges show a player's [MCTiers](https://mctiers.com/) ranking for one gamemode, read on the server for their verified Minecraft account ID. Nothing in the browser can set or change a ranking, and a ranking never proves who owns an account; only in-game verification does.
 
-## Status: off until MCPVP approves
+## The API
 
-Research on 25 November 2026:
+Checked on 26 November 2026 against the published OpenAPI document (`https://mctiers.net/api/openapi.json`, API version 2.1.0, server `https://mctiers.net/api/v2`). Version 1 is deprecated, so only v2 is used.
 
-- MCPVP publishes no API documentation. `/api` and `/docs` return 404, and its Terms of Service do not grant data access.
-- Its tier pages load an internal feed, `/tiers/data`: pages of 100 players with `uuid`, `name`, `kitRanks`, `kitRetired`, `hasMore`, and `nextOffset`. That is an implementation detail of their site, not a published interface.
-- Their `robots.txt` asks AI crawlers not to collect content.
+| Endpoint | Used for |
+| --- | --- |
+| `GET /mode/list` | Gamemode slugs and titles. Read at start and every 6 hours; the last good list is kept during outages |
+| `GET /profile/{uuid}` | A player's rankings, name and region. `404` means not on MCTiers (shown as Unranked); `400` means a bad ID |
+| `GET /profile/{uuid}/rankings`, `GET /profile/by-name/{name}` | Not used. Rankings come with the profile, and names are never used to look players up |
 
-So the integration is built and tested against that record shape, but **stays off** until MCPVP gives permission and an address. The previous version called that internal feed and two other tier sites directly; it also matched players by name and showed one "best" rank from any kit. All of that has been removed.
+A ranking is `{ tier: 1–5, pos: 0 (high) or 1 (low), peak_tier, peak_pos, attained, retired }`. DonutWagers shows `HT3` for tier 3, pos 0. When `retired` is true the badge shows the peak tier with an `R` in front (`RHT2`), as the API documentation asks.
 
-## Turning it on
+Gamemodes are whatever `/mode/list` returns (today: vanilla, sword, axe, mace, uhc, smp, pot, nethop, spear). A gamemode added later shows up under its own title. DonutWagers matches use two of them: **Sword** matches show the `sword` tier, **Crystal PvP** matches show the `vanilla` tier (MCTiers' crystal gamemode).
 
-Ask MCPVP for written permission and one of:
+MCTiers documents no rate limit; answers carry `Cache-Control: max-age=60`. DonutWagers stays well below any reasonable limit: one request at a time, at least a second apart, about every 12 hours per player.
 
-1. **A per-player address** (best): `MCPVP_API_URL=https://…/{uuid}`. A 404 is treated as "unranked", so confirm with MCPVP that this is what 404 means.
-2. **A list address**: `MCPVP_API_URL=https://…?offset={offset}`. The whole list is read once per refresh period, one page per second, and a partial list is never used.
-
-Then set:
+## Settings
 
 | Variable | Default | |
 | --- | --- | --- |
-| `MCPVP_ENABLED` | `false` | `true` once approved |
-| `MCPVP_API_URL` | none | Must contain `{uuid}` or `{offset}`; https only in production |
-| `MCPVP_API_KEY` | none | Sent as `Authorization: Bearer …` if MCPVP issues one |
-| `MCPVP_REFRESH_HOURS` | `12` | 1–168 |
+| `MCTIERS_ENABLED` | `true` | `false` turns lookups off; badges then show "Ranking unavailable" |
+| `MCTIERS_API_URL` | `https://mctiers.net/api/v2` | https only in production |
+| `MCTIERS_REFRESH_HOURS` | `12` | 1–168 |
 
-Admin, Health shows whether it is connected and why not.
+Admin, Health shows whether it is connected, the last error, and when it will try again.
 
 ## How it works
 
-- **Identity.** The bot reports the account ID with each verification. Rankings are stored with that ID and are ignored if the player later links another account. An answer about a different account is rejected.
-- **Kits.** Each kit is separate. Matches show only their own kit (Crystal or Sword); profiles list every kit MCPVP sends, including ones added later. Formats are kept exactly as sent (`HT1`, `MT3`, `ST6`, …); unknown formats are never mapped to a guess.
-- **States.** *Ranked*; *Unranked* (MCPVP answered, with no ranking); *Waiting*; *Unavailable* (no answer yet, or switched off); *Stale* (last good answer older than two refresh periods, or the latest attempt failed). A failure never deletes rankings already known.
-- **Schedule.** Every minute up to 10 due players are checked, one at a time. Provider failures back off 1, 2, 4… minutes up to 6 hours, with jitter, and longer if MCPVP sends `Retry-After`. A malformed record for one player only delays that player.
+- **Identity.** Rankings are fetched by the account ID the bot reported at verification and stored with that ID. If the player links another account, the old rankings are ignored. An answer about a different account is refused.
+- **When.** Right after verification, then about every 12 hours. Rankings stored by the old MCPVP integration are fetched again straight away and never shown.
+- **States.** *Ranked*; *Unranked* (MCTiers answered, no ranking for that gamemode); *Waiting* (first check pending); *Unavailable* (no answer yet, or switched off); *Stale* (last good answer older than two refresh periods, or the latest attempt failed; the last known ranking stays, marked "may be out of date").
+- **Failures.** Timeouts of 10 seconds, no redirects, a 1 MB limit, and schema checks on every field. Provider failures back off 1, 2, 4… minutes up to 6 hours with jitter, longer if MCTiers sends `Retry-After`. One player's bad record does not hold up the others. Lookups for the same account at the same moment share one request.
 - **Manual refresh.** Players: once per 15 minutes. Admins: any player, logged.
-- **Safety.** No redirects, 10-second timeout, 5 MB limit, address only from server settings, kit names and tiers checked before storing, everything escaped on display.
+- **Match pages.** A finished match keeps the tier each player had when it started, marked "Tier when this match was played", so later tier changes do not rewrite history.
 - **Privacy.** Hidden match creators stay hidden: their badge appears only after a snipe or once the match starts.
 
-## Not done
+## Tests
 
-- MCPVP approval and an address.
-- Kit icons are original drawings, not Minecraft textures. Sword and Crystal match the item art used elsewhere on the site.
+`test/tiers.test.js` runs against `test/support/mctiers-stub.js`, a local server in the documented v2 shape. Automated tests never contact MCTiers. The provider was also tried once by hand against the real API (a ranked profile, a retired profile, and an unknown account).
