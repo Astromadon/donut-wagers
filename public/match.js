@@ -1,283 +1,247 @@
-const $ = (selector) => document.querySelector(selector);
-const matchCode = decodeURIComponent(location.pathname.split('/').pop());
-let toastTimer;
-let activeMatch = null;
-let chatPoll = null;
-let chatLoading = false;
-let chatSignature = '';
-let readyPoll = null;
+/* Match room. Helpers: common.js. Routing and account controls: shell.js. */
+registerPage('room', (page) => {
+  const { $, $$ } = page;
+  const matchCode = location.pathname.split('/').pop();
+  const HIDDEN = 'Hidden until ready';
+  const DUEL_SERVER = 'mcpvp.club';
+  let match = null;
+  let renderedSignature = '';
+  let chatSignature = null;
+  let chatBusy = false;
+  let ticketUrl = null;
 
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character]));
-}
-function showToast(message) {
-  const element = $('#toast');
-  element.textContent = message;
-  element.classList.add('visible');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => element.classList.remove('visible'), 3500);
-}
-async function api(endpoint, options) {
-  const response = await fetch(endpoint, options);
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || 'Something went wrong.');
-  return body;
-}
-async function copyText(value) {
-  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
-  const field = document.createElement('textarea');
-  field.value = value;
-  document.body.append(field);
-  field.select();
-  document.execCommand('copy');
-  field.remove();
-}
-function firstTo(match) {
-  const value = String(match.rules || '').match(/First to\s+([^,;]+)/i);
-  return value ? value[1].trim() : '5 + 2';
-}
-function region(match) {
-  const sections = String(match.game_mode || '').split('·').map((item) => item.trim());
-  return sections.find((item) => /^(EU|NAE)$/i.test(item)) || 'Any';
-}
-function game(match) {
-  return String(match.game_mode || 'DonutSMP Duel').split('·')[0].trim();
-}
-function statusLabel(match) {
-  if (match.status === 'PLAYER_1_DEPOSIT_PENDING' || match.status === 'OPEN') return 'Waiting for opponent';
-  if (match.status === 'DEPOSIT_PENDING') return 'Both players joining';
-  if (match.status === 'READY_UP') return `Ready up · ${Number(match.ready_count || 0)}/2`;
-  if (match.status === 'IN_PROGRESS') return 'Match in progress';
-  if (match.status === 'COMPLETED') return 'Match complete';
-  return String(match.status || 'Match open').replaceAll('_', ' ').toLowerCase();
-}
-function tagStyle(tag) {
-  const normalized = String(tag || '').trim().toLowerCase();
-  if (normalized === 'owner') return 'owner';
-  if (['staff', 'admin', 'helper'].includes(normalized)) return 'staff';
-  return 'rank';
-}
-function renderPlayerTags(tags, tierBadge = null) {
-  const validTags = Array.isArray(tags) ? tags.filter((tag) => String(tag || '').trim()) : [];
-  if (!validTags.length && !tierBadge) return '';
-  const tier = tierBadge ? `<span class="player-tag tier-source" title="${escapeHtml(`${tierBadge.label} ${tierBadge.mode || ''}`.trim())}"><img src="${escapeHtml(tierBadge.logo)}" alt="${escapeHtml(tierBadge.label)} logo">${escapeHtml(tierBadge.tier)}</span>` : '';
-  return `<div class="player-tags">${tier}${validTags.map((tag) => `<span class="player-tag ${tagStyle(tag)}">${escapeHtml(tag)}</span>`).join('')}</div>`;
-}
-function playerCard(label, username, minecraftName, tags, tierBadge, waiting) {
-  const hiddenIdentity = username === 'Hidden until ready';
-  const safeMinecraft = minecraftName ? escapeHtml(minecraftName) : '';
-  return `<article class="player-card${waiting ? ' waiting' : ''}${hiddenIdentity ? ' identity-hidden' : ''}">
-    <p class="team">${label}</p>
-    <h3>${hiddenIdentity ? '◉ Hidden until ready' : escapeHtml(username || 'Waiting for opponent')}</h3>
-    ${renderPlayerTags(tags, tierBadge)}
-    ${hiddenIdentity ? '<div class="playing-as">Identity unlocks when both players ready up</div>' : minecraftName ? `<div class="playing-as">Playing as <b>${safeMinecraft}</b><button class="minecraft-copy" data-copy-minecraft="${safeMinecraft}" aria-label="Copy ${safeMinecraft}'s Minecraft username">⧉</button></div>` : '<div class="playing-as">Minecraft account pending</div>'}
-  </article>`;
-}
-function renderChat(messages) {
-  const list = $('#chat-messages');
-  const signature = messages.map((message) => message.id).join('|');
-  if (signature === chatSignature) return;
-  chatSignature = signature;
-  if (!messages.length) {
-    list.innerHTML = '<div class="chat-empty">No messages yet. Say hello to your opponent.</div>';
-    return;
+  const isOpenMatch = () => ['OPEN', 'PLAYER_1_DEPOSIT_PENDING'].includes(match.status);
+  const isStaff = () => Boolean(me?.is_owner);
+  const apiPath = (action) => `/api/matches/${encodeURIComponent(match.match_code)}/${action}`;
+
+  function showState(title, text, action) {
+    clearInterval(poll);
+    $('#room').hidden = true;
+    $('#room-state').hidden = false;
+    $('#room-state').innerHTML = `<div class="empty">${icon('swords')}<h3>${escapeHtml(title)}</h3><p>${escapeHtml(text)}</p>${action}</div>`;
   }
-  list.innerHTML = messages.map((message) => {
-    const avatar = message.avatar_url ? `<img src="${escapeHtml(message.avatar_url)}" alt="">` : 'DW';
-    const created = new Date(message.created_at);
-    const time = Number.isNaN(created.getTime()) ? '' : created.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    return `<article class="chat-row"><span class="chat-avatar">${avatar}</span><div class="chat-bubble"><div class="chat-meta"><b>${escapeHtml(message.username)}</b><time>${escapeHtml(time)}</time></div><p>${escapeHtml(message.body)}</p></div></article>`;
-  }).join('');
-  list.scrollTop = list.scrollHeight;
-}
-async function loadChat() {
-  if (chatLoading || !activeMatch) return;
-  chatLoading = true;
-  try {
-    const result = await api(`/api/matches/${encodeURIComponent(activeMatch.match_code)}/chat`);
-    renderChat(result.messages || []);
-    $('#chat-input').disabled = !result.can_send;
-    $('#chat-send').disabled = !result.can_send;
-    $('#chat-input').placeholder = result.can_send ? 'Message your opponent…' : 'Chat is read-only';
-  } catch (error) {
-    $('#chat-messages').innerHTML = `<div class="chat-empty">${escapeHtml(error.message)}</div>`;
-    $('#chat-input').disabled = true;
-    $('#chat-send').disabled = true;
-  } finally { chatLoading = false; }
-}
-function configureChat(match, viewer) {
-  activeMatch = match;
-  clearInterval(chatPoll);
-  chatSignature = '';
-  loadChat();
-  chatPoll = setInterval(loadChat, 3000);
-}
-function activateTimeline(match) {
-  const ready = Boolean(match.opponent);
-  const started = match.status === 'IN_PROGRESS' || match.status === 'COMPLETED';
-  const complete = match.status === 'COMPLETED';
-  $('#ready-step').classList.toggle('active', ready);
-  $('#started-step').classList.toggle('active', started);
-  $('#complete-step').classList.toggle('active', complete);
-}
-function render(match, viewer) {
-  $('#match-content').classList.remove('match-action-pending', 'match-action-success');
-  configureChat(match, viewer);
-  $('#top-balance').textContent = Number(viewer?.balance || 0).toLocaleString();
-  $('#top-snipes').textContent = Number(viewer?.snipes || 0).toLocaleString();
-  document.title = `${game(match)} · DonutWagers`;
-  $('#match-title').textContent = `1v1 ${game(match)}`;
-  $('#match-created').textContent = match.tournament_id ? `${match.tournament_name} · Round ${match.tournament_round} · Match ${match.match_code}` : `Match ${match.match_code} · Created ${new Date(match.created_at).toLocaleString()}`;
-  $('#match-status').textContent = statusLabel(match);
-  $('#fact-game').textContent = game(match);
-  $('#fact-region').textContent = region(match);
-  $('#fact-first-to').textContent = firstTo(match);
-  $('#fact-entry').textContent = match.tournament_id ? 'FREE' : Number(match.wager_amount || 0).toLocaleString();
-  $('#fact-prize').textContent = match.tournament_id ? Number(match.tournament_prize || 0).toLocaleString() : (Number(match.wager_amount || 0) * 1.8).toLocaleString();
-  $('#rule-mode').textContent = game(match);
-  $('#match-rules').textContent = match.rules || 'First to 5, win by two.';
-  $('#players').innerHTML = `${playerCard('CREATING TEAM', match.creator, match.creator_minecraft_username, match.creator_tags, match.creator_tier_badge, false)}<div class="player-vs">VS</div>${playerCard('JOINING TEAM', match.opponent, match.opponent_minecraft_username, match.opponent_tags, match.opponent_tier_badge, !match.opponent)}`;
-  const opponentMinecraft = viewer?.id === match.creator_id
-    ? match.opponent_minecraft_username
-    : viewer?.id === match.opponent_id
-      ? match.creator_minecraft_username
-      : match.opponent_minecraft_username || null;
-  const duelCommand = opponentMinecraft ? `/duel ${opponentMinecraft}` : '';
-  $('#duel-command').textContent = duelCommand || 'Waiting for verified opponent…';
-  $('#copy-duel-command').disabled = !duelCommand;
-  $('#copy-duel-server').onclick = async () => {
-    try { await copyText('mcpvp.club'); showToast('Server address copied: mcpvp.club'); } catch { showToast('Could not copy the server address.'); }
-  };
-  $('#copy-duel-command').onclick = async () => {
-    if (!duelCommand) return;
-    try { await copyText(duelCommand); showToast(`Copied ${duelCommand}`); } catch { showToast('Could not copy the duel command.'); }
-  };
-  activateTimeline(match);
-  clearInterval(readyPoll);
-  if (match.status === 'READY_UP') readyPoll = setInterval(loadMatch, 3000);
-  const readyButton = $('#ready-match');
-  const canReady = Boolean(viewer && match.status === 'READY_UP' && !match.viewer_ready);
-  readyButton.hidden = !canReady;
-  readyButton.onclick = async () => {
-    readyButton.disabled = true;
-    readyButton.textContent = 'Readying…';
-    try {
-      const updated = await api(`/api/matches/${encodeURIComponent(match.match_code)}/ready`, { method: 'POST' });
-      showToast(updated.status === 'IN_PROGRESS' ? 'Both players are ready. Identities unlocked.' : 'You are ready. Waiting for your opponent.');
-      await loadMatch();
-    } catch (error) { readyButton.disabled = false; readyButton.textContent = '✓ Ready Up'; showToast(error.message); }
-  };
-  $('#copy-match-link').onclick = async () => {
-    try { await copyText(match.match_url); showToast('Match link copied.'); } catch { showToast('Could not copy the match link.'); }
-  };
-  const canReport = Boolean(viewer && match.opponent_id && [match.creator_id, match.opponent_id].includes(viewer.id) && ['IN_PROGRESS', 'DISPUTED'].includes(match.status));
-  const creatorResult = $('#report-creator-win');
-  const opponentResult = $('#report-opponent-win');
-  creatorResult.hidden = !canReport;
-  opponentResult.hidden = !canReport;
-  if (canReport) {
-    creatorResult.textContent = `Report ${match.creator} Won`;
-    opponentResult.textContent = `Report ${match.opponent} Won`;
-    creatorResult.onclick = () => reportResult(match, match.creator_id);
-    opponentResult.onclick = () => reportResult(match, match.opponent_id);
+
+  /* ---------- Players and terms ---------- */
+  function fighter(side) {
+    const name = match[side];
+    const minecraft = match[`${side}_minecraft_username`];
+    if (!name) return '<div class="fighter is-empty"><h2>Waiting for opponent</h2></div>';
+    const ready = match.status === 'READY_UP' ? (match[`${side}_ready`] ? `<span class="tag tag-good">${icon('check')}Ready</span>` : '<span class="tag">Not ready</span>') : '';
+    if (name === HIDDEN) return `<div class="fighter is-empty"><h2>Hidden</h2><p>${ready || 'Revealed once both players are ready'}</p></div>`;
+    const won = match.status === 'COMPLETED' && match.winner_id && match.winner_id === match[`${side}_id`];
+    const you = me && me.id === match[`${side}_id`];
+    return `<div class="fighter ${won ? 'is-winner' : ''}"><h2>${escapeHtml(name)}</h2><div class="fighter-tags">${tierBadge(match[`${side}_tier`], { showEmpty: true })}${playerTags(match[`${side}_tags`])}</div>
+      <p>${you ? '<span>You</span>' : ''}${won ? `<span class="tag tag-gold">${icon('trophy')}Winner</span>` : ''}${ready}${minecraft ? `<button class="copy-name" type="button" data-copy="${escapeHtml(minecraft)}" aria-label="Copy Minecraft name ${escapeHtml(minecraft)}">${escapeHtml(minecraft)}${icon('copy')}</button>` : ''}</p></div>`;
   }
-  const cancelButton = $('#cancel-match');
-  const isParticipant = Boolean(viewer && [match.creator_id, match.opponent_id].includes(viewer.id));
-  const isOpenCreator = isParticipant && viewer.id === match.creator_id && ['OPEN', 'PLAYER_1_DEPOSIT_PENDING'].includes(match.status);
-  const canVoteToCancel = isParticipant && !match.tournament_id && ['READY_UP', 'IN_PROGRESS', 'DISPUTED'].includes(match.status);
-  cancelButton.hidden = !isOpenCreator && !canVoteToCancel;
-  if (isOpenCreator) {
-    cancelButton.textContent = 'Cancel Match';
-    cancelButton.onclick = () => cancelMatch(match, false);
-  } else if (canVoteToCancel) {
-    const voted = Number(match.cancellation_vote_count || 0);
-    cancelButton.textContent = voted ? `Cancel Vote (${voted}/2)` : 'Request Cancellation';
-    cancelButton.onclick = () => cancelMatch(match, true);
+  function facts() {
+    const terms = matchTerms(match);
+    const rows = [['Mode', modeName(match)], ['Region', matchRegion(match)]];
+    if (terms.firstTo) rows.push(['First to', terms.winByTwo ? `${terms.firstTo}, win by 2` : terms.firstTo]);
+    else rows.push(['Rules', terms.label]);
+    if (terms.lead) rows.push(['Joining player’s lead', `${terms.lead} round${terms.lead === 1 ? '' : 's'}`]);
+    rows.push(['Entry', match.tournament_id ? 'Free' : fullNumber(match.wager_amount)]);
+    rows.push([match.tournament_id ? 'Event prize' : 'Winner gets', fullNumber(match.tournament_id ? match.tournament_prize : winnerPayout(match.wager_amount)), 'prize']);
+    return rows.map(([label, value, extra]) => `<div class="${extra || ''}"><span>${escapeHtml(label)}</span><b class="num">${escapeHtml(value)}</b></div>`).join('');
   }
-  $('#players').onclick = async (event) => {
-    const button = event.target.closest('[data-copy-minecraft]');
-    if (!button) return;
-    try { await copyText(button.dataset.copyMinecraft); showToast(`Copied ${button.dataset.copyMinecraft}.`); } catch { showToast('Could not copy the Minecraft username.'); }
-  };
-  $('#contact-staff').onclick = async (event) => {
-    const button = event.currentTarget;
-    button.disabled = true;
-    button.textContent = 'Creating ticket…';
-    try {
-      const ticket = await api(`/api/matches/${encodeURIComponent(match.match_code)}/contact-staff`, { method: 'POST' });
-      $('#support-message').innerHTML = `${escapeHtml(ticket.message)}${ticket.ticket_url ? ` <a href="${escapeHtml(ticket.ticket_url)}" target="_blank" rel="noopener">Open ticket</a>` : ''}`;
-      button.textContent = ticket.created ? '✓ Ticket Created' : '✓ Ticket Already Open';
-      showToast(ticket.message);
-    } catch (error) {
-      button.disabled = false;
-      button.textContent = '◉ Contact Staff';
-      showToast(error.message);
+
+  /* ---------- The one thing to do next ---------- */
+  function heading(title, text = '') { return `<div><h2>${escapeHtml(title)}</h2>${text ? `<p>${escapeHtml(text)}</p>` : ''}</div>`; }
+  function nextAction() {
+    const participant = match.viewer_is_participant;
+    if (isOpenMatch()) {
+      const expiry = '<p class="field-hint" data-expires></p>';
+      if (match.is_creator) return ['', `${heading('Waiting for an opponent', 'Share the link, or leave it open for anyone in the lobby.')}<button class="command" type="button" data-copy="${escapeHtml(location.origin + matchHref(match))}" data-copy-message="Match link copied."><code>${escapeHtml(location.origin + matchHref(match))}</code>${icon('copy')}</button>${expiry}`];
+      const short = me.balance < match.wager_amount;
+      if (!me.minecraft_verified) return ['', `${heading('Verify Minecraft to join', 'You need a verified account before you can enter a match.')}<a class="btn btn-primary btn-large" href="/profile/connections">Verify Minecraft</a>${expiry}`];
+      if (short) return ['', `${heading('Add funds to join', `The entry is ${fullNumber(match.wager_amount)} and you have ${fullNumber(me.balance)} available.`)}<a class="btn btn-primary btn-large" href="/wallet">Make a deposit</a>${expiry}`];
+      return ['', `${heading('Take this match', 'Your entry is locked as soon as you join.')}<button class="btn btn-primary btn-large" type="button" data-do="join">Join for ${fullNumber(match.wager_amount)}</button>${expiry}`];
     }
+    if (match.status === 'READY_UP') {
+      if (!participant) return ['is-quiet', heading('Players are getting ready', 'Names appear once both are ready.')];
+      if (match.viewer_ready) return ['', `${heading('You’re ready', 'The room opens the moment your opponent readies up.')}<p class="waiting">Waiting for your opponent</p>`];
+      return ['', `${heading('Ready up', 'Names, the duel command, and the chat unlock when both players are ready. If that takes longer than 15 minutes, both entries are returned.')}<button class="btn btn-primary btn-large" type="button" data-do="ready">I’m ready</button>`];
+    }
+    if (match.status === 'IN_PROGRESS' || match.status === 'DISPUTED') {
+      const disputed = match.status === 'DISPUTED';
+      if (!participant) return [disputed ? 'is-bad' : 'is-quiet', heading(disputed ? 'Under staff review' : 'Match in progress', disputed ? 'The players reported different results, or staff paused the match.' : 'The result appears here once both players report it.')];
+      const mine = match.viewer_side;
+      const other = mine === 'creator' ? 'opponent' : 'creator';
+      const rival = match[`${other}_minecraft_username`];
+      const reported = match.viewer_reported_winner_id;
+      const report = `<div class="action-buttons"><button class="btn ${reported ? '' : 'btn-good'}" type="button" data-do="report" data-winner="${escapeHtml(match[`${mine}_id`])}" aria-pressed="${reported === match[`${mine}_id`]}">I won</button><button class="btn" type="button" data-do="report" data-winner="${escapeHtml(match[`${other}_id`])}" aria-pressed="${reported === match[`${other}_id`]}">${escapeHtml(match[other])} won</button></div>`;
+      if (disputed) return ['is-bad', `${heading('This match is in dispute', match.result_state === 'report_timeout' ? 'Only one player reported within 24 hours, so staff will decide. Contact them and share your proof.' : 'Contact staff and share your proof. If one of you reported by mistake, change the report below.')}${report}`];
+      const duel = `<div class="fight-steps"><div><small>Join the server</small><button class="command" type="button" data-copy="${DUEL_SERVER}"><code>${DUEL_SERVER}</code>${icon('copy')}</button></div><div><small>Challenge your opponent</small>${rival ? `<button class="command" type="button" data-copy="/duel ${escapeHtml(rival)}"><code>/duel ${escapeHtml(rival)}</code>${icon('copy')}</button>` : '<p class="muted">Ask for their Minecraft name in chat.</p>'}</div></div>`;
+      if (reported) return ['', `${heading('Report sent', `You said ${reported === match[`${mine}_id`] ? 'you' : match[other]} won. You can change it until your opponent reports.`)}<p class="waiting">Waiting for your opponent’s report</p>${report}`];
+      if (match.opponent_has_reported) return ['', `${heading('Your opponent reported a result', 'Submit yours to settle the match. If the reports differ, staff will review it.')}${report}`];
+      return ['', `${heading('Fight')}${duel}<div><span class="field-label">When the duel is over, who won?</span></div>${report}`];
+    }
+    if (match.status === 'COMPLETED') {
+      if (participant && match.winner_id === me.id) return ['is-good', `${heading('You won', match.tournament_id ? 'The bracket updates when the round is complete.' : 'Paid to your balance:')}${match.tournament_id ? '' : `<div class="display num payout">+${fullNumber(match.payout_amount)}</div>`}<a class="btn" href="/matches">Find another match</a>`];
+      if (participant) return ['is-quiet', `${heading(`${match.winner || 'Your opponent'} won`, 'The result is on your record. If it’s wrong, contact staff with your proof.')}<a class="btn" href="/matches">Find another match</a>`];
+      return ['is-quiet', heading(`${match.winner || 'A player'} won`, match.payout_amount ? `${fullNumber(match.payout_amount)} was paid out.` : '')];
+    }
+    if (match.status === 'CANCELLED') {
+      const text = { expired: 'Nobody joined within 30 minutes. The entry was returned.', ready_timeout: 'Both players did not ready up within 15 minutes. Both entries were returned.', mutual_cancellation: 'Both players agreed to cancel. Both entries were returned.', creator_cancelled_before_join: 'The creator cancelled before anyone joined. The entry was returned.' }[match.result_state] || 'Locked entries were returned.';
+      return ['is-quiet', `${heading(match.result_state === 'expired' ? 'Match expired' : 'Match cancelled', text)}<a class="btn" href="/matches">Back to matches</a>`];
+    }
+    return ['is-quiet', heading('Waiting for an update')];
+  }
+  function secondaryActions() {
+    const participant = match.viewer_is_participant;
+    const live = ['READY_UP', 'IN_PROGRESS', 'DISPUTED'].includes(match.status);
+    let html = `<button class="btn" type="button" data-copy="${escapeHtml(location.origin + matchHref(match))}" data-copy-message="Match link copied.">${icon('link')}Copy match link</button>`;
+    if (participant && match.status !== 'CANCELLED') html += ticketUrl ? `<a class="btn" href="${escapeHtml(ticketUrl)}" target="_blank" rel="noopener">${icon('discord')}Open ticket</a>` : `<button class="btn" type="button" data-do="staff">${icon('users')}Contact staff</button>`;
+    if (match.is_creator && isOpenMatch()) html += '<button class="btn btn-danger" type="button" data-do="cancel">Cancel match</button>';
+    else if (participant && live && !match.tournament_id) {
+      if (match.viewer_voted_cancel) html += '<button class="btn" type="button" disabled>Cancellation requested</button>';
+      else html += `<button class="btn btn-danger" type="button" data-do="cancel">${match.cancellation_vote_count ? 'Accept cancellation' : 'Request cancellation'}</button>`;
+    }
+    return html;
+  }
+
+  /* ---------- Rendering ---------- */
+  function render() {
+    const signature = JSON.stringify([match, me?.balance, ticketUrl]);
+    if (signature === renderedSignature) return;
+    renderedSignature = signature;
+    $('#room-state').hidden = true;
+    $('#room').hidden = false;
+    document.title = `${modeName(match)} match | DonutWagers`;
+    $('#match-title').textContent = `${modeName(match)} 1v1`;
+    $('#match-subtitle').textContent = match.tournament_id ? `${match.tournament_name}, round ${match.tournament_round}` : `Match ${match.match_code}, created ${timeAgo(match.created_at)}`;
+    $('#match-status').innerHTML = statusTag(match);
+    const step = isOpenMatch() ? 0 : { READY_UP: 1, IN_PROGRESS: 2, DISPUTED: 2, COMPLETED: 3 }[match.status] ?? -1;
+    $('#progress').classList.toggle('stopped', step < 0);
+    $$('#progress li').forEach((item, index) => {
+      item.classList.toggle('done', index < step);
+      item.classList.toggle('now', index === step);
+      if (index === step) item.setAttribute('aria-current', 'step'); else item.removeAttribute('aria-current');
+    });
+    $('#players').innerHTML = `${fighter('creator')}<b aria-hidden="true">VS</b>${fighter('opponent')}`;
+    const [tone, content] = nextAction();
+    $('#action').className = `action panel ${tone}`;
+    const cancelNotice = match.viewer_is_participant && match.cancellation_vote_count && !match.viewer_voted_cancel && ['READY_UP', 'IN_PROGRESS', 'DISPUTED'].includes(match.status) ? `<div class="notice notice-warn">${icon('info')}<span>Your opponent asked to cancel. Both entries are returned if you accept below.</span></div>` : '';
+    $('#action').innerHTML = cancelNotice + content;
+    $('#facts').innerHTML = facts();
+    $('#secondary').innerHTML = secondaryActions();
+    const chatVisible = !isOpenMatch() && (match.viewer_is_participant || isStaff());
+    $('#chat').hidden = !chatVisible;
+    $('#room').classList.toggle('has-chat', chatVisible);
+    tick();
+  }
+  function tick() {
+    const element = $('[data-expires]');
+    if (!element || !match?.expires_at) return;
+    const left = new Date(match.expires_at).getTime() - Date.now();
+    element.textContent = left > 0 ? `Closes in ${clock(left)} if nobody joins.` : 'Closing…';
+  }
+  page.interval(tick, 1000);
+  page.onViewer(() => { if (match) render(); });
+
+  let loading = false;
+  async function loadMatch() {
+    if (loading) return;
+    loading = true;
+    try {
+      const previous = match?.status;
+      match = await api(`/api/matches/${encodeURIComponent(matchCode)}`);
+      if (previous && previous !== match.status) await refreshViewer();
+      if (!page.active) return;
+      render();
+      if (!$('#chat').hidden) loadChat();
+    } catch (error) {
+      if (handleAuthError(error)) return;
+      if (error.status === 404) showState('Match not found', 'The link may be wrong, or the match was removed.', '<a class="btn btn-primary" href="/matches">Browse matches</a>');
+      // A failed background refresh keeps the room on screen and tries again.
+      else if (!match) $('#room-state').innerHTML = `<div class="empty">${icon('alert')}<h3>The room didn’t load</h3><p>${escapeHtml(error.message)} Trying again…</p></div>`;
+    } finally { loading = false; }
+  }
+
+  /* ---------- Actions ---------- */
+  const actions = {
+    async join(button) {
+      if (!await ensureAllowed('wagers')) return;
+      const agreed = await confirmDialog({ title: 'Join this match?', body: 'Your entry is locked as soon as you join.', rows: [['Terms', matchTerms(match).label], ['Balance after joining', fullNumber(me.balance - match.wager_amount)], ['Your entry', fullNumber(match.wager_amount), true]], confirm: 'Join match' });
+      if (agreed) await withBusy(button, async () => { try { await post(apiPath('join')); toast('You’re in. Ready up when you can play.'); } finally { await loadMatch(); } });
+    },
+    ready: (button) => withBusy(button, async () => {
+      const updated = await post(apiPath('ready'));
+      if (updated.status === 'IN_PROGRESS') toast('Both players are ready. Good luck.');
+      await loadMatch();
+    }),
+    async report(button) {
+      const winnerId = button.dataset.winner;
+      if (winnerId === match.viewer_reported_winner_id) return;
+      const mine = winnerId === me.id;
+      const name = mine ? 'you' : match.viewer_side === 'creator' ? match.opponent : match.creator;
+      const agreed = await confirmDialog({ title: mine ? 'Report that you won?' : `Report that ${name} won?`, body: match.opponent_has_reported ? 'If both reports match, the match settles immediately and can’t be changed by players.' : 'The match settles when your opponent reports the same result.', confirm: 'Send report' });
+      if (!agreed) return;
+      await withBusy(button, async () => {
+        const result = await post(apiPath('result'), { winner_id: winnerId });
+        toast({ waiting_for_opponent: 'Report sent.', settled: 'Both reports match. The match is settled.', disputed: 'The reports don’t match. Staff will review it.' }[result.outcome] || 'Report sent.');
+        await loadMatch();
+      });
+    },
+    async cancel(button) {
+      const solo = isOpenMatch();
+      const accepting = !solo && match.cancellation_vote_count > 0;
+      const agreed = await confirmDialog({ title: solo ? 'Cancel this match?' : accepting ? 'Accept the cancellation?' : 'Ask to cancel?', body: solo ? 'It leaves the lobby and your entry is returned.' : accepting ? 'The match ends and both entries are returned.' : 'Nothing changes unless your opponent accepts. Both entries are then returned.', confirm: solo ? 'Cancel match' : accepting ? 'Accept' : 'Send request', danger: true });
+      if (!agreed) return;
+      await withBusy(button, async () => { const result = await post(apiPath('cancel')); toast(result.outcome === 'cancelled' ? 'Match cancelled. Entries were returned.' : 'Request sent.'); await loadMatch(); });
+    },
+    staff: (button) => withBusy(button, async () => {
+      const ticket = await post(apiPath('contact-staff'));
+      ticketUrl = ticket.ticket_url || null;
+      toast(ticket.message);
+      render();
+    }),
   };
-}
+  page.on(document, 'click', (event) => {
+    const button = event.target.closest('[data-do]');
+    if (button) actions[button.dataset.do]?.(button);
+  });
 
-$('#chat-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const input = $('#chat-input');
-  const body = input.value.trim();
-  if (!body || !activeMatch) return;
-  const button = $('#chat-send');
-  button.disabled = true;
-  try {
-    await api(`/api/matches/${encodeURIComponent(activeMatch.match_code)}/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: body }) });
-    input.value = '';
-    chatSignature = '';
-    await loadChat();
+  /* ---------- Chat ---------- */
+  async function loadChat() {
+    if (chatBusy || !match) return;
+    chatBusy = true;
+    try {
+      const result = await api(apiPath('chat'));
+      const input = $('#chat-input');
+      input.disabled = $('#chat-send').disabled = !result.can_send;
+      input.placeholder = result.can_send ? 'Write a message' : result.locked_until_ready ? 'Opens when both are ready' : 'Chat is closed';
+      const messages = result.messages || [];
+      const signature = `${result.locked_until_ready}|${messages.map((message) => message.id).join('|')}`;
+      if (signature === chatSignature) return;
+      chatSignature = signature;
+      const list = $('#chat-messages');
+      const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+      if (!messages.length) { list.innerHTML = `<p class="chat-empty">${result.locked_until_ready ? 'Chat unlocks when both players are ready.' : 'No messages yet.'}</p>`; return; }
+      list.innerHTML = messages.map((message, index) => {
+        const mine = message.user_id === me?.id;
+        const previous = messages[index - 1];
+        const grouped = previous && previous.user_id === message.user_id && new Date(message.created_at) - new Date(previous.created_at) < 120_000;
+        const time = new Date(message.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        return `${grouped ? '' : `<div class="message-meta ${mine ? 'mine' : ''}"><b>${mine ? 'You' : escapeHtml(message.username)}</b> ${escapeHtml(time)}</div>`}<div class="message ${mine ? 'mine' : ''}">${escapeHtml(message.body)}</div>`;
+      }).join('');
+      if (atBottom || messages.at(-1).user_id === me?.id) list.scrollTop = list.scrollHeight;
+    } catch { /* The next refresh retries. */ }
+    finally { chatBusy = false; }
+  }
+  $('#chat-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const input = $('#chat-input');
+    const body = input.value.trim();
+    if (!body || !match) return;
+    const sent = await withBusy($('#chat-send'), async () => { await post(apiPath('chat'), { message: body }); return true; });
+    if (sent) { input.value = ''; await loadChat(); }
     input.focus();
-  } catch (error) { showToast(error.message); }
-  finally { if (!['COMPLETED', 'CANCELLED'].includes(activeMatch.status)) button.disabled = false; }
+  });
+
+  /* ---------- Start ---------- */
+  const poll = page.interval(() => { if (!document.hidden) loadMatch(); }, 3000);
+  page.on(document, 'visibilitychange', () => { if (!document.hidden && match) loadMatch(); });
+  loadMatch();
+  // Arriving here usually follows creating or joining, which just locked an entry.
+  refreshAccount();
 });
-
-async function reportResult(match, winnerId) {
-  const buttons = [$('#report-creator-win'), $('#report-opponent-win')];
-  buttons.forEach((button) => { button.disabled = true; });
-  try {
-    const result = await api(`/api/matches/${encodeURIComponent(match.match_code)}/result`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ winner_id: winnerId }) });
-    const message = { waiting_for_opponent: 'Result submitted. Waiting for your opponent.', settled: 'Both players agreed. The match is settled.', disputed: 'Conflicting results were reported. Staff can now review the dispute.' }[result.outcome] || 'Result submitted.';
-    showToast(message);
-    await loadMatch();
-  } catch (error) {
-    buttons.forEach((button) => { button.disabled = false; });
-    showToast(error.message);
-  }
-}
-
-async function cancelMatch(match, needsOtherPlayer) {
-  const button = $('#cancel-match');
-  button.disabled = true;
-  button.textContent = needsOtherPlayer ? 'Requesting…' : 'Cancelling…';
-  $('#match-content').classList.add('match-action-pending');
-  try {
-    const result = await api(`/api/matches/${encodeURIComponent(match.match_code)}/cancel`, { method: 'POST' });
-    const notice = result.outcome === 'cancelled'
-      ? 'Match cancelled. Locked balance has been released.'
-      : 'Cancellation requested. Waiting for the other player to confirm.';
-    showToast(notice);
-    $('#match-content').classList.remove('match-action-pending');
-    $('#match-content').classList.add('match-action-success');
-    await new Promise((resolve) => setTimeout(resolve, 320));
-    await loadMatch();
-  } catch (error) {
-    $('#match-content').classList.remove('match-action-pending');
-    button.disabled = false;
-    button.textContent = needsOtherPlayer ? 'Request Cancellation' : 'Cancel Match';
-    showToast(error.message);
-  }
-}
-
-async function loadMatch() {
-  try {
-    const [match, viewer] = await Promise.all([api(`/api/matches/${encodeURIComponent(matchCode)}`), api('/api/me').catch(() => null)]);
-    $('#loading').hidden = true;
-    $('#match-content').hidden = false;
-    render(match, viewer);
-  } catch (error) {
-    $('#loading').textContent = error.message;
-  }
-}
-loadMatch();

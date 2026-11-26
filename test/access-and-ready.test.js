@@ -1,18 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+process.env.DONUT_WAGERS_ADMIN_DISCORD_ID = '900000000000000000';
 const { staffRole, isOwner, isAdmin, isStaff, publicMatchForViewer, searchRegisteredPlayers } = require('../server');
 
-test('staff roles enforce the intended permission levels', () => {
-  const owner = { player_tags: ['Owner'] };
-  const admin = { player_tags: ['Admin'] };
-  const helper = { player_tags: ['Helper'] };
-  const player = { player_tags: ['LT3'] };
+test('only the configured owner account has staff powers; tags are only labels', () => {
+  const owner = { discord_id: '900000000000000000', player_tags: [] };
   assert.equal(staffRole(owner), 'owner');
-  assert.equal(isOwner(owner), true);
-  assert.equal(isAdmin(admin), true);
-  assert.equal(isAdmin(helper), false);
-  assert.equal(isStaff(helper), true);
-  assert.equal(isStaff(player), false);
+  assert.ok(isOwner(owner) && isAdmin(owner) && isStaff(owner));
+  for (const tags of [['Owner'], ['Admin'], ['Helper'], ['Staff']]) {
+    const other = { discord_id: '900000000000000001', player_tags: tags };
+    assert.equal(staffRole(other), 'player', tags[0]);
+    assert.ok(!isAdmin(other) && !isStaff(other), tags[0]);
+  }
+  assert.equal(staffRole({ ...owner, deleted_at: new Date().toISOString() }), 'player');
 });
 
 test('opponent identity stays hidden until both players ready up', () => {

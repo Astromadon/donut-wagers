@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en" data-auth="{{auth}}" data-view="{{view}}" data-active="{{active}}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0a">
+  <meta name="description" content="{{description}}">
+  <meta name="robots" content="{{robots}}">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="DonutWagers">
+  <meta property="og:title" content="{{title}}">
+  <meta property="og:description" content="{{description}}">
+  <meta property="og:image" content="{{base}}/og-image.png">
+  <meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="DonutWagers">
+  <meta name="twitter:card" content="summary_large_image">
+  {{canonical}}
+  <title>{{title}}</title>
+  <link rel="icon" type="image/png" href="/favicon.png"><link rel="apple-touch-icon" href="/dw-logo-128.png">
+  <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/shell.css"><link rel="stylesheet" href="/landing.css"><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/match.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="backdrop" aria-hidden="true"><div></div></div>
+  <div id="progress-bar" aria-hidden="true"></div>
+  <div id="offline" class="offline" role="status" hidden><svg class="icon" aria-hidden="true"><use href="/icons.svg#alert"/></svg>You’re offline. This page may be out of date.</div>
+  <div class="app">
+    <div id="sidebar-scrim" class="scrim"></div>
+    <aside id="sidebar" class="sidebar" aria-label="Site">
+      <a class="brand" href="/" aria-label="DonutWagers home"><img src="/dw-logo-128.png" alt="" width="34" height="34"><span class="label">DonutWagers</span></a>
+      <div class="menu-wrap game-wrap">
+        <button id="game-toggle" class="game-select" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="game-menu" title="Choose a game mode"><span class="game-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#box"/></svg></span><span id="game-name" class="label">Minecraft</span><svg class="icon label chevron" aria-hidden="true"><use href="/icons.svg#down"/></svg></button>
+        <div id="game-menu" class="popover game-menu" role="menu" aria-label="Game mode">
+          <button type="button" role="menuitemradio" data-game="all" aria-checked="true"><svg class="icon" aria-hidden="true"><use href="/icons.svg#box"/></svg>All modes</button>
+          <button type="button" role="menuitemradio" data-game="crystal" aria-checked="false"><img class="item" src="/items/end-crystal.png" alt="" width="16" height="16">Crystal PvP</button>
+          <button type="button" role="menuitemradio" data-game="sword" aria-checked="false"><img class="item" src="/items/diamond-sword.png" alt="" width="16" height="16">Sword</button>
+        </div>
+      </div>
+      <nav class="side-nav" aria-label="Main">
+        <h2><span class="label">Compete</span></h2>
+        <a href="/matches" data-nav="matches"><svg class="icon" aria-hidden="true"><use href="/icons.svg#swords"/></svg><span class="label">Matches</span></a>
+        <a href="/tournaments" data-nav="tournaments"><svg class="icon" aria-hidden="true"><use href="/icons.svg#trophy"/></svg><span class="label">Tournaments</span></a>
+        <a href="/leaderboard" data-nav="leaderboard"><svg class="icon" aria-hidden="true"><use href="/icons.svg#chart"/></svg><span class="label">Leaderboard</span></a>
+        <h2><span class="label">Shop</span></h2>
+        <a href="/shop" data-nav="shop"><svg class="icon" aria-hidden="true"><use href="/icons.svg#bag"/></svg><span class="label">Shop</span></a>
+        <a href="/gift-cards" data-nav="gift-cards"><svg class="icon" aria-hidden="true"><use href="/icons.svg#gift"/></svg><span class="label">Gift Cards</span></a>
+        <h2><span class="label">Referrals</span></h2>
+        <a href="/referrals" data-nav="referrals"><svg class="icon" aria-hidden="true"><use href="/icons.svg#users"/></svg><span class="label">Referrals</span></a>
+        <div id="recent" data-auth-in hidden><h2><span class="label">Recently played</span></h2><div id="recent-list"></div></div>
+        <h2><span class="label">Profile</span></h2>
+        <a href="/profile" data-nav="profile"><svg class="icon" aria-hidden="true"><use href="/icons.svg#user"/></svg><span class="label">Profile</span></a>
+        <a href="/settings" data-nav="settings"><svg class="icon" aria-hidden="true"><use href="/icons.svg#settings"/></svg><span class="label">Settings</span></a>
+        {{staffNav}}
+      </nav>
+      <div class="side-social">{{socials}}</div>
+    </aside>
+
+    <div class="app-main">
+      <header class="topbar">
+        <button id="drawer-toggle" class="btn btn-quiet btn-icon" type="button" aria-expanded="false" aria-controls="sidebar" aria-label="Open menu"><svg class="icon" aria-hidden="true"><use href="/icons.svg#menu"/></svg></button>
+        <a class="brand topbar-brand" href="/" aria-label="DonutWagers home"><img src="/dw-logo-128.png" alt="" width="32" height="32"></a>
+        <div class="player-search" role="search" data-auth-in>
+          <svg class="icon" aria-hidden="true"><use href="/icons.svg#search"/></svg>
+          <input id="player-search-input" class="input" type="search" placeholder="Search players" autocomplete="off" aria-label="Search players by Discord or Minecraft name" aria-controls="player-search-results">
+          <div id="player-search-results" class="popover search-results"></div>
+        </div>
+        <div class="topbar-actions" data-auth-in>
+          <div class="balance"><a class="balance-amount" href="/wallet" data-tip="Open your wallet"><svg class="icon" aria-hidden="true"><use href="/icons.svg#coins"/></svg><span class="sr-only">Available balance</span><b id="balance" class="num">{{balance}}</b></a><a class="balance-add" href="/wallet" aria-label="Deposit" data-tip="Deposit"><svg class="icon" aria-hidden="true"><use href="/icons.svg#plus"/></svg></a></div>
+          <span class="snipe-chip" data-tip="Snipes reveal who created an open match" tabindex="0"><img class="snipe-icon" src="/items/snipe.png" alt="" width="18" height="18"><span class="sr-only">Snipes left</span><b id="snipes" class="num">{{snipes}}</b></span>
+          <span id="verified-badge" class="verified" {{verified}}><svg class="icon" aria-hidden="true"><use href="/icons.svg#badge"/></svg>Verified</span>
+          <button id="verify-badge" class="verified is-missing" type="button" data-verify {{unverified}}><svg class="icon" aria-hidden="true"><use href="/icons.svg#badge"/></svg>Verify</button>
+        </div>
+        <div class="topbar-social">{{socials}}</div>
+        <div class="topbar-account" data-auth-in>
+          <div class="menu-wrap">
+            <button id="favorites-toggle" class="icon-button heart" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="favorites-menu" aria-label="Favorite players" data-tip="Favorites"><svg class="icon" aria-hidden="true"><use href="/icons.svg#heart"/></svg></button>
+            <div id="favorites-menu" class="popover panel-menu"><h2>Favorites</h2><div id="favorites-list"></div></div>
+          </div>
+          <div class="menu-wrap">
+            <button id="notifications-toggle" class="icon-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="notifications-menu" aria-label="Notifications" data-tip="Notifications"><svg class="icon" aria-hidden="true"><use href="/icons.svg#bell"/></svg><span id="notification-count" class="count" hidden></span></button>
+            <div id="notifications-menu" class="popover panel-menu"><h2>Notifications</h2><div id="notification-list"><p class="popover-empty">Loading…</p></div></div>
+          </div>
+          <div class="menu-wrap">
+            <button id="profile-menu-toggle" class="profile-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="profile-menu" aria-label="Account menu"><span class="js-avatar"><span class="avatar">{{avatar}}</span></span><svg class="icon chevron" aria-hidden="true"><use href="/icons.svg#down"/></svg></button>
+            <div id="profile-menu" class="popover profile-menu" role="menu" aria-label="Account">
+              <div class="profile-menu-head"><span class="js-avatar"><span class="avatar">{{avatar}}</span></span><div><b class="js-username">{{username}}</b><small>{{discordId}}</small></div></div>
+              <div class="menu-group"><a role="menuitem" href="/profile"><svg class="icon" aria-hidden="true"><use href="/icons.svg#user"/></svg>Profile</a><button role="menuitem" id="open-statistics" type="button"><svg class="icon" aria-hidden="true"><use href="/icons.svg#stats"/></svg>Statistics</button><a role="menuitem" href="/teams"><svg class="icon" aria-hidden="true"><use href="/icons.svg#users"/></svg>Teams</a></div>
+              <form class="menu-group" method="post" action="/auth/logout"><button role="menuitem" class="is-danger" type="submit"><svg class="icon" aria-hidden="true"><use href="/icons.svg#logout"/></svg>Log out</button></form>
+            </div>
+          </div>
+        </div>
+        <div class="topbar-account" data-auth-out><a class="btn btn-small btn-primary" href="{{login}}" data-login><svg class="icon" aria-hidden="true"><use href="/icons.svg#discord"/></svg>Log in</a></div>
+      </header>
+      <main id="main" tabindex="-1"><div id="page" class="page">{{content}}</div></main>
+      <footer class="site-footer"><div>
+        <p>An independent community platform. Not affiliated with DonutSMP or Mojang. DonutSMP in-game currency only.</p>
+        <nav aria-label="Footer"><a href="/how-it-works">How it works</a><a href="/rules">Rules</a>{{legal}}</nav>
+      </div></footer>
+    </div>
+  </div>
+
+  <nav class="tabbar" aria-label="Quick">
+    <a href="/matches" data-nav="matches"><svg class="icon" aria-hidden="true"><use href="/icons.svg#swords"/></svg>Matches</a>
+    <a href="/tournaments" data-nav="tournaments"><svg class="icon" aria-hidden="true"><use href="/icons.svg#trophy"/></svg>Events</a>
+    <a href="/leaderboard" data-nav="leaderboard"><svg class="icon" aria-hidden="true"><use href="/icons.svg#chart"/></svg>Ranks</a>
+    <a href="/wallet" data-nav="wallet"><svg class="icon" aria-hidden="true"><use href="/icons.svg#wallet"/></svg>Wallet</a>
+    <a href="/profile" data-nav="profile"><svg class="icon" aria-hidden="true"><use href="/icons.svg#user"/></svg>Profile</a>
+  </nav>
+
+  <dialog id="verify-dialog" aria-labelledby="verify-title"><div class="dialog-body">
+    <div class="dialog-head"><div><h2 id="verify-title">Verify Minecraft</h2><p id="verify-text"></p></div><button class="btn btn-quiet btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></div>
+    <form id="verify-form" class="form-stack"><label class="field"><span>Minecraft username</span><input id="minecraft-username" class="input" minlength="3" maxlength="16" pattern="[A-Za-z0-9_]{3,16}" autocomplete="off" spellcheck="false" required></label><button class="btn btn-primary" type="submit">Get a code</button></form>
+    <div id="verify-pending" class="form-stack" hidden><p class="muted">On DonutSMP, send this private message:</p><button id="verify-command" class="command" type="button"><code></code><svg class="icon" aria-hidden="true"><use href="/icons.svg#copy"/></svg></button><p id="verify-status" class="waiting" role="status"></p><button id="verify-restart" class="btn" type="button">Use a different name</button></div>
+    <div id="verify-done" class="form-stack" hidden><div class="notice notice-good"><svg class="icon" aria-hidden="true"><use href="/icons.svg#check"/></svg><span id="verify-done-text"></span></div><button class="btn btn-primary" type="button" data-close>Done</button></div>
+  </div></dialog>
+  <dialog id="statistics-dialog" class="dialog-wide" aria-labelledby="statistics-title"><div class="dialog-body"><div class="dialog-head"><h2 id="statistics-title">Player Statistics</h2><div class="statistics-tools"><select id="statistics-mode" class="input" aria-label="Game mode"><option value="all">All</option><option value="crystal">Crystal</option><option value="sword">Sword</option></select><button class="btn btn-quiet btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></div></div><div id="statistics-content"></div></div></dialog>
+  <div id="tier-tip" role="tooltip" popover="manual"></div>
+  <div id="toast" role="status" popover="manual"></div>
+  <div id="announcer" class="sr-only" role="status"></div>
+  <script type="application/json" id="viewer">{{viewer}}</script>
+  <script src="/common.js" defer></script><script src="/shell.js" defer></script><script src="/landing.js" defer></script><script src="/dashboard.js" defer></script><script src="/match.js" defer></script><script src="/start.js" defer></script>
+</body>
+</html>

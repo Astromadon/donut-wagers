@@ -1,5 +1,9 @@
 .env
-data/db.json
+.env.*
+!.env.example
+data/
 *.log
 node_modules/
 .npm-cache/
+test-results/
+playwright-report/

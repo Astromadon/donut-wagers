@@ -1,0 +1,114 @@
+<div id="connection-notice" class="notice notice-bad" role="alert" hidden><svg class="icon" aria-hidden="true"><use href="/icons.svg#alert"/></svg><span></span><button class="btn btn-small" id="retry-load" type="button">Retry</button></div>
+
+        <section id="matches" class="view" aria-labelledby="matches-title">
+          <div class="view-head"><div class="view-title"><span class="view-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#swords"/></svg></span><div><small>Compete</small><h1 id="matches-title">Live Matches</h1></div></div><button id="create" class="btn btn-primary" type="button"><svg class="icon" aria-hidden="true"><use href="/icons.svg#plus"/></svg>Create Match</button></div>
+          <div id="paused-notice" class="notice notice-warn" {{paused}}><svg class="icon" aria-hidden="true"><use href="/icons.svg#info"/></svg><span><b>Matchmaking is switched off right now.</b> You can look around and manage your account. Matches already running carry on.</span></div>
+          <div id="onboarding" class="onboarding panel" hidden></div>
+          <div id="announcement-feed" class="announcements" {{announcementsHidden}}>{{announcements}}</div>
+          <div class="toolbar">
+            <div class="segmented" role="group" aria-label="Match status"><button type="button" data-status="available" aria-pressed="true">Open <b id="available-count" class="num"></b></button><button type="button" data-status="ongoing" aria-pressed="false">Ongoing <b id="ongoing-count" class="num"></b></button></div>
+            <div class="segmented" role="group" aria-label="Game mode"><button type="button" data-mode="all" aria-pressed="true">All</button><button type="button" data-mode="crystal" aria-pressed="false">Crystal</button><button type="button" data-mode="sword" aria-pressed="false">Sword</button></div>
+            <div class="segmented" role="group" aria-label="Region"><button type="button" data-region="all" aria-pressed="true">All</button><button type="button" data-region="EU" aria-pressed="false">EU</button><button type="button" data-region="NAE" aria-pressed="false">NAE</button></div>
+            <select id="sort-matches" class="input" aria-label="Sort matches"><option value="newest">Newest first</option><option value="high">Highest entry</option><option value="low">Lowest entry</option></select>
+          </div>
+          <div class="lobby"><div id="match-list" class="match-grid" aria-live="polite"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
+          <aside class="rail" aria-label="At a glance"><section class="panel rail-card" id="rail-active" hidden><h2>Your matches</h2><div id="rail-active-list"></div></section><section class="panel rail-card"><h2>Lobby</h2><dl id="rail-lobby" class="rail-facts"></dl></section><section class="panel rail-card"><h2>Top this week</h2><div id="rail-top"></div><a class="text-link" href="/leaderboard">Full leaderboard</a></section><section class="panel rail-card" id="rail-event" hidden><h2>Next tournament</h2><div id="rail-event-body"></div></section></aside></div>
+        </section>
+
+        <section id="tournaments" class="view" aria-labelledby="tournaments-title">
+          <div class="view-head"><div class="view-title"><span class="view-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#trophy"/></svg></span><div><small>Compete</small><h1 id="tournaments-title">Tournaments</h1></div></div><a href="/admin" class="btn btn-primary" data-admin-only data-open-tab="events" hidden><svg class="icon" aria-hidden="true"><use href="/icons.svg#plus"/></svg>Create tournament</a></div>
+          <div id="tournament-list" class="tournament-grid"><div class="skeleton"></div><div class="skeleton"></div></div>
+        </section>
+
+        <section id="leaderboard" class="view" aria-labelledby="leaderboard-title">
+          <div class="view-head"><div class="view-title"><span class="view-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#chart"/></svg></span><div><small>Compete</small><h1 id="leaderboard-title">Leaderboard</h1></div></div></div>
+          <div class="toolbar">
+            <div class="segmented" role="group" aria-label="Rank by"><button type="button" data-board-sort="wins" aria-pressed="true">Most wins</button><button type="button" data-board-sort="earned" aria-pressed="false">Top earnings</button></div>
+            <div class="segmented" role="group" aria-label="Period"><button type="button" data-board-period="week" aria-pressed="false">7 days</button><button type="button" data-board-period="month" aria-pressed="false">30 days</button><button type="button" data-board-period="all" aria-pressed="true">All time</button></div>
+          </div>
+          <div id="leaderboard-content"><div class="skeleton"></div></div>
+        </section>
+
+        <section id="wallet" class="view" aria-labelledby="wallet-title">
+          <div class="view-head"><div class="view-title"><span class="view-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#wallet"/></svg></span><div><small>Balance</small><h1 id="wallet-title">Wallet</h1></div></div><span id="bot-status" class="tag"></span></div>
+          <div class="wallet-layout">
+            <div class="wallet-main">
+              <div class="balance-panel panel"><div><span>Available</span><strong id="wallet-balance" class="num">–</strong></div><div><span>Locked</span><strong id="locked" class="num">–</strong><small>In matches or withdrawals</small></div></div>
+              <div class="panel"><div class="wallet-tabs segmented" role="group" aria-label="Wallet action"><button type="button" data-wallet-tab="deposit" aria-pressed="true"><svg class="icon" aria-hidden="true"><use href="/icons.svg#deposit"/></svg>Deposit</button><button type="button" data-wallet-tab="withdraw" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="/icons.svg#withdraw"/></svg>Withdraw</button></div><div id="wallet-content" class="wallet-content" aria-live="polite"></div></div>
+            </div>
+            <section class="panel history" aria-labelledby="history-title"><h2 id="history-title">Activity</h2><div id="wallet-history"></div></section>
+          </div>
+        </section>
+
+        <section id="profile" class="view" aria-labelledby="profile-title">
+          <div class="view-head"><div class="view-title"><span class="view-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#user"/></svg></span><div><small>Manage profile</small><h1 id="profile-title">Profile Settings</h1></div></div><div class="view-user"><span class="js-profile-avatar"></span><b class="js-profile-name"></b></div></div>
+          <div class="tab-panel">
+            <div class="tabs" role="tablist" aria-label="Profile">
+              <a role="tab" id="tab-overview" href="/profile" aria-controls="pane-overview"><svg class="icon" aria-hidden="true"><use href="/icons.svg#user"/></svg>My Profile</a>
+              <a role="tab" id="tab-matches" href="/profile/matches" aria-controls="pane-matches"><svg class="icon" aria-hidden="true"><use href="/icons.svg#trophy"/></svg>Match History</a>
+              <a role="tab" id="tab-transactions" href="/profile/transactions" aria-controls="pane-transactions"><svg class="icon" aria-hidden="true"><use href="/icons.svg#card"/></svg>Transactions</a>
+              <a role="tab" id="tab-connections" href="/profile/connections" aria-controls="pane-connections"><svg class="icon" aria-hidden="true"><use href="/icons.svg#link"/></svg>Connections</a>
+              <i id="tab-underline" aria-hidden="true"></i>
+            </div>
+            <div id="pane-overview" class="tab-pane" role="tabpanel" aria-labelledby="tab-overview">
+              <section class="overview-card"><span class="js-profile-avatar"></span><div><h2><span class="js-profile-name"></span> <span id="profile-tags"></span></h2><p id="profile-since" class="muted"></p></div><div class="overview-actions"><a class="btn btn-small btn-gold" href="/profile/connections">Manage connections</a><button class="btn btn-small btn-gold" type="button" id="profile-statistics">Statistics</button></div></section>
+              <section class="form-card"><h2>Account</h2>
+                <label class="form-cell"><span>Discord username</span><input id="field-discord" class="input" readonly><small>Updates from Discord each time you log in</small></label>
+                <label class="form-cell"><span>Discord ID</span><input id="field-id" class="input num" readonly></label>
+                <label class="form-cell"><span>Minecraft username</span><input id="field-minecraft" class="input" readonly><small id="field-minecraft-note"></small></label>
+                <label class="form-cell"><span>Member since</span><input id="field-since" class="input" readonly></label>
+              </section>
+              <section class="form-card"><h2>PvP tiers</h2><div id="profile-tiers"></div></section>
+              <section class="form-card"><h2>Statistics</h2><div id="profile-stats"></div></section>
+            </div>
+            <div id="pane-matches" class="tab-pane" role="tabpanel" aria-labelledby="tab-matches" hidden><div id="profile-matches"></div></div>
+            <div id="pane-transactions" class="tab-pane" role="tabpanel" aria-labelledby="tab-transactions" hidden><div id="profile-transactions"></div></div>
+            <div id="pane-connections" class="tab-pane" role="tabpanel" aria-labelledby="tab-connections" hidden>
+              <section class="form-card"><h2>Connected accounts</h2>
+                <div class="connection"><span class="connection-icon is-discord"><svg class="icon" aria-hidden="true"><use href="/icons.svg#discord"/></svg></span><div><b>Discord</b><small id="connection-discord"></small></div><span class="tag tag-good">Connected</span></div>
+                <div class="connection"><span class="connection-icon is-minecraft"><svg class="icon" aria-hidden="true"><use href="/icons.svg#box"/></svg></span><div><b>Minecraft</b><small id="connection-minecraft"></small><small id="connection-minecraft-note"></small></div><div id="connection-minecraft-actions" class="connection-actions"></div></div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section id="settings" class="view" aria-labelledby="settings-title">
+          <div class="view-head"><div class="view-title"><span class="view-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#settings"/></svg></span><div><small>Preferences</small><h1 id="settings-title">Settings</h1></div></div><div class="view-user"><span class="js-profile-avatar"></span><b class="js-profile-name"></b></div></div>
+          <section class="form-card"><h2>Display</h2>
+            <label class="connection switch-row"><span class="connection-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#sparkles"/></svg></span><div><b>Animated background</b><small>Saved in this browser. It also stays still when your system asks for reduced motion.</small></div><input id="pref-background" class="switch" type="checkbox" role="switch"></label>
+          </section>
+          <section class="form-card"><h2>Take a break</h2>
+            <div class="connection"><span class="connection-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#clock"/></svg></span><div><b>Pause your account</b><small id="break-status"></small></div><div class="break-controls"><select id="break-length" class="input" aria-label="Break length"><option value="1">1 day</option><option value="7" selected>7 days</option><option value="30">30 days</option><option value="180">180 days</option></select><button id="start-break" class="btn btn-small" type="button">Start break</button></div></div>
+          </section>
+          <section class="form-card"><h2>Your data</h2>
+            <div class="connection"><span class="connection-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#deposit"/></svg></span><div><b>Download your data</b><small>Everything stored about your account, as a JSON file. See the <a class="text-link" href="/privacy">privacy policy</a>.</small></div><a class="btn btn-small" href="/api/me/export" download>Download</a></div>
+            <div class="connection"><span class="connection-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#close"/></svg></span><div><b>Delete your account</b><small>Removes your identity and signs you out everywhere. Withdraw your balance first.</small></div><button id="delete-account" class="btn btn-small btn-danger" type="button">Delete account</button></div>
+          </section>
+          <section class="form-card"><h2>Security</h2>
+            <div class="connection"><span class="connection-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#monitor"/></svg></span><div><b>Other devices</b><small>Log out everywhere except here.</small></div><button id="revoke-sessions" class="btn btn-small" type="button">Log out other devices</button></div>
+            <div class="connection"><span class="connection-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#logout"/></svg></span><div><b>This device</b><small>You can come back any time with the same Discord account.</small></div><form method="post" action="/auth/logout"><button class="btn btn-small btn-danger" type="submit">Log out</button></form></div>
+          </section>
+        </section>
+
+{{adminView}}
+  <dialog id="match-dialog" class="dialog-wide create-dialog" aria-labelledby="match-dialog-title"><form id="match-form" novalidate>
+    <div class="dialog-head dialog-bar"><span class="view-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#swords"/></svg></span><div><h2 id="match-dialog-title">Create Match</h2><p>1v1. Closes after 30 minutes if nobody joins.</p></div><button class="btn btn-quiet btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="/icons.svg#close"/></svg></button></div>
+    <div class="create-scroll">
+      <fieldset class="create-group"><legend>Game</legend>
+        <div class="create-pair"><div class="field"><span>Mode</span><div class="choices" data-choice="game"><button type="button" class="choice choice-row" value="Crystal PvP"><img class="item" src="/items/end-crystal.png" alt="" width="16" height="16">Crystal</button><button type="button" class="choice choice-row" value="Sword Duel"><img class="item" src="/items/diamond-sword.png" alt="" width="16" height="16">Sword</button></div><div id="create-tier" class="create-tier"></div></div><div class="field"><span>Region</span><div class="choices" data-choice="region"><button type="button" class="choice" value="EU">EU</button><button type="button" class="choice" value="NAE">NAE</button></div></div></div>
+      </fieldset>
+      <fieldset class="create-group"><legend>Rules</legend>
+        <div class="create-pair"><div class="field"><span>First to</span><div class="choices" data-choice="firstTo"><button type="button" class="choice" value="1">1</button><button type="button" class="choice" value="2">2</button><button type="button" class="choice" value="3+2">3<small>by 2</small></button><button type="button" class="choice" value="5+2">5<small>by 2</small></button></div></div><div class="field"><span>Opponent’s round lead</span><div class="choices" data-choice="lead"><button type="button" class="choice" value="0">0</button><button type="button" class="choice" value="1">1</button><button type="button" class="choice" value="2">2</button><button type="button" class="choice" value="3">3</button><button type="button" class="choice" value="4">4</button></div></div></div>
+        <p id="lead-help" class="field-hint"></p>
+      </fieldset>
+      <fieldset class="create-group"><legend>Entry</legend>
+        <div class="amount-row"><div class="amount-input"><svg class="icon" aria-hidden="true"><use href="/icons.svg#coins"/></svg><input id="match-amount" class="input" inputmode="decimal" autocomplete="off" placeholder="10m" aria-label="Your entry" aria-describedby="match-amount-hint"></div><div class="chip-row" id="amount-chips"><button type="button" class="btn btn-small" value="1000000">1M</button><button type="button" class="btn btn-small" value="5000000">5M</button><button type="button" class="btn btn-small" value="10000000">10M</button><button type="button" class="btn btn-small" value="25000000">25M</button></div></div>
+        <p id="match-amount-hint" class="field-hint"></p>
+        <dl class="summary-list"><div><dt>Balance after locking your entry</dt><dd id="match-balance-after" class="num"></dd></div><div><dt>Platform fee (10% of both entries)</dt><dd id="match-fee" class="num"></dd></div><div class="total"><dt>Winner receives</dt><dd id="match-payout" class="num"></dd></div></dl>
+      </fieldset>
+    </div>
+    <div class="dialog-actions dialog-bar"><button class="btn btn-quiet" type="button" data-close>Cancel</button><button id="match-submit" class="btn btn-primary" type="submit"><svg class="icon" aria-hidden="true"><use href="/icons.svg#plus"/></svg>Create Match</button></div>
+  </form></dialog>
+
+
+

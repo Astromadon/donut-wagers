@@ -2,12 +2,26 @@
   "name": "donut-wagers-auth",
   "version": "0.1.0",
   "private": true,
+  "engines": { "node": ">=22" },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test --test-isolation=none test/*.test.js",
+    "test": "node --test test/*.test.js",
+    "test:e2e": "playwright test",
+    "lint": "eslint .",
+    "check": "npm run lint && npm test && npm run test:e2e",
+    "check:integrity": "node scripts/check-integrity.js",
+    "backup:state": "node scripts/export-state.js",
+    "revert:storage": "node scripts/revert-storage.js",
     "import:postgres": "node scripts/import-json-state-to-postgres.js"
   },
   "dependencies": {
-    "pg": "^8.13.3"
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.14.1",
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.65.1",
+    "eslint": "^10.15.0",
+    "globals": "^17.14.0"
   }
 }

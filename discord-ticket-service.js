@@ -24,6 +24,7 @@ class DiscordTicketService {
   async request(path, options = {}) {
     const response = await fetch(`https://discord.com/api/v10${path}`, {
       ...options,
+      signal: AbortSignal.timeout(10_000),
       headers: {
         Authorization: `Bot ${this.botToken}`,
         'Content-Type': 'application/json',
@@ -71,7 +72,7 @@ class DiscordTicketService {
     await this.request(`/channels/${channel.id}/messages`, {
       method: 'POST',
       body: JSON.stringify({
-        content: `**DonutWagers match support**\nMatch: <${matchUrl}>\nRequested by: ${requester.discord_username} (${minecraftName})`,
+        content: `**DonutWagers match support**\nMatch: <${matchUrl}>\nRequested by: ${String(requester.discord_username).replace(/[`*_~|>\\]/g, '')} (${minecraftName})`,
         allowed_mentions: { parse: [] },
       }),
     });
@@ -90,7 +91,7 @@ class DiscordTicketService {
         embeds: [{
           title: String(title || 'DonutWagers announcement').slice(0, 256),
           description: String(message || '').slice(0, 4096),
-          color: 12120632,
+          color: 16760591,
           footer: { text: 'DonutWagers Official' },
           timestamp: new Date().toISOString(),
         }],

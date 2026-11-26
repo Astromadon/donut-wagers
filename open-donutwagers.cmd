@@ -18,5 +18,5 @@ if errorlevel 1 (
 
 start "" "http://localhost:3000/"
 echo DonutWagers opened in your default browser.
-echo Use http://localhost:3000/ - do not open dashboard.html directly.
+echo Use http://localhost:3000/ - do not open the project files directly.
 timeout /t 2 /nobreak >nul

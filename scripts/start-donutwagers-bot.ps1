@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 $websiteRoot = Split-Path -Parent $PSScriptRoot
 $envFile = Join-Path $websiteRoot '.env'
-$botRoot = 'C:\DonutWagersBotJava'
+$botRoot = if ($env:DONUT_WAGERS_BOT_ROOT) { $env:DONUT_WAGERS_BOT_ROOT } else { 'C:\DonutWagersBotJava' }
 
 if (-not (Test-Path -LiteralPath $envFile)) {
   throw "Website environment file not found: $envFile"
@@ -21,10 +21,11 @@ if ([string]::IsNullOrWhiteSpace($sharedSecret)) {
   throw 'DONUT_WAGERS_BOT_WEBHOOK_SECRET is empty.'
 }
 
-$env:DONUT_WAGERS_API_URL = 'https://donut-wagers.up.railway.app'
+if (-not $env:DONUT_WAGERS_API_URL) { $env:DONUT_WAGERS_API_URL = 'https://donut-wagers.up.railway.app' }
 $env:DONUT_WAGERS_BOT_WEBHOOK_SECRET = $sharedSecret
 $env:DONUT_WAGERS_BOT_USERNAME = 'DonutWagersBot'
-$env:DONUT_WAGERS_DEBUG_CHAT = 'true'
+# Writes other players' chat to a local file. Turn it on only while diagnosing a message format.
+$env:DONUT_WAGERS_DEBUG_CHAT = 'false'
 
 $connectionCheck = Join-Path $PSScriptRoot 'check-bot-connection.js'
 & node $connectionCheck

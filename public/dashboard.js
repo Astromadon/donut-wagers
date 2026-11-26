@@ -1,821 +1,874 @@
-const $ = (s) => document.querySelector(s);
-const toast = (message) => { const e = $('#toast'); e.textContent = message; e.classList.add('show'); setTimeout(() => e.classList.remove('show'), 3500); };
-const api = async (url, options) => { const r = await fetch(url, options); const data = await r.json(); if (!r.ok) { const error = Error(data.error || 'Something went wrong.'); error.data = data; throw error; } return data; };
-const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
-let matchConfig = { tab: 'game', game: 'Crystal PvP', region: 'EU', firstTo: '5+2', lead: 0, amount: 1000000 };
-let currentUser = null;
-let openMatches = [];
-let activeMatchFilter = 'all';
-let activeStatusFilter = 'available';
-let walletTab = 'deposit';
-let walletTimer = null;
-let walletPoll = null;
-let walletBotOnline = false;
-const MIN_WITHDRAWAL_AMOUNT = 15_000_000;
-function tagStyle(tag) {
-  const normalized = String(tag || '').trim().toLowerCase();
-  if (normalized === 'owner') return 'owner';
-  if (['staff', 'admin', 'helper'].includes(normalized)) return 'staff';
-  return 'rank';
-}
-function renderPlayerTags(tags, extraClass = '', tierBadge = null) {
-  const validTags = Array.isArray(tags) ? tags.filter((tag) => String(tag || '').trim()) : [];
-  if (!validTags.length && !tierBadge) return '';
-  const tier = tierBadge ? `<span class="player-tag tier-source" title="${escapeHtml(`${tierBadge.label} ${tierBadge.mode || ''}`.trim())}"><img src="${escapeHtml(tierBadge.logo)}" alt="${escapeHtml(tierBadge.label)} logo">${escapeHtml(tierBadge.tier)}</span>` : '';
-  return `<span class="player-tags ${extraClass}">${tier}${validTags.map((tag) => `<span class="player-tag ${tagStyle(tag)}">${escapeHtml(tag)}</span>`).join('')}</span>`;
-}
-function matchRegion(mode) {
-  const value = String(mode || '');
-  if (/\bNAE\b/i.test(value)) return 'NAE';
-  return 'EU';
-}
-function compactMode(match) {
-  return /crystal|cpvp/i.test(String(match.game_mode || '')) ? 'CPvP' : 'Sword';
-}
-function matchFirstTo(match) {
-  return String(match.rules || '').match(/First to\s+([^,;]+)/i)?.[1]?.trim() || '5+2';
-}
-function matchTimeLeft(match) {
-  const remaining = Math.max(0, new Date(match.created_at).getTime() + 30 * 60_000 - Date.now());
-  const minutes = Math.floor(remaining / 60_000);
-  const seconds = Math.floor((remaining % 60_000) / 1000);
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-}
-function tokenMillions(value) { return (Number(value || 0) / 1_000_000).toFixed(2); }
-function renderSidebarMatches(recentMatches = []) {
-  const live = openMatches.slice(0, 3);
-  $('#sidebar-live-matches').innerHTML = live.length ? live.map((match) => `<a class="sidebar-match-link" href="${escapeHtml(match.match_url || `/matches/${match.id}`)}"><span>${compactMode(match)}</span><small>${matchRegion(match.game_mode)} · ${Number(match.wager_amount || 0).toLocaleString()}</small><b>Join →</b></a>`).join('') : '';
-  const recent = recentMatches.filter((match) => !['OPEN','PLAYER_1_DEPOSIT_PENDING'].includes(match.status)).slice(0, 3);
-  $('#sidebar-recent-matches').innerHTML = recent.length ? recent.map((match) => `<a class="sidebar-recent-link" href="${escapeHtml(match.match_url || `/matches/${match.id}`)}"><i>◷</i><span>${compactMode(match)}<small>${escapeHtml(String(match.status || 'played').replaceAll('_',' '))}</small></span></a>`).join('') : '<span class="sidebar-match-empty">No recent matches</span>';
-}
-function renderOpenMatches() {
-  const visible = activeStatusFilter === 'ongoing' ? [] : openMatches.filter((match) => {
-    if (activeMatchFilter === 'all') return true;
-    if (activeMatchFilter === 'EU' || activeMatchFilter === 'NAE') return matchRegion(match.game_mode) === activeMatchFilter;
-    return String(match.game_mode || '').toLowerCase().includes(activeMatchFilter.toLowerCase());
+/* Signed-in sections. Helpers: common.js. Routing and account controls: shell.js. */
+registerPage('app', (page) => {
+  const { $, $$ } = page;
+  const MIN_WAGER = 1_000_000;
+  const MIN_DEPOSIT = 100_000;
+  const MIN_WITHDRAWAL = 15_000_000;
+  const HISTORY_LABELS = { deposit: ['Deposit', 'deposit'], withdrawal: ['Withdrawal', 'withdraw'], match_won: ['Match won', 'trophy'], match_lost: ['Match lost', 'swords'], tournament_prize: ['Tournament prize', 'crown'] };
+  const PROFILE_TABS = { overview: 'Profile settings', matches: 'Match history', transactions: 'Transactions', connections: 'Connections' };
+  const VIEWS = { matches: 'Matches', tournaments: 'Tournaments', leaderboard: 'Leaderboard', wallet: 'Wallet', profile: 'Profile settings', settings: 'Settings', admin: 'Admin' };
+
+  let openMatches = null;
+  let ongoingMatches = null;
+  let myMatches = [];
+  let currentView = 'matches';
+  const filters = { status: 'available', mode: 'all', region: 'all', sort: 'newest' };
+
+  /* ---------- Account data ---------- */
+  const isVerified = () => Boolean(me.minecraft_verified && me.minecraft_username);
+  page.onViewer(() => {
+    const verified = isVerified();
+    $('#wallet-balance').textContent = fullNumber(me.balance);
+    $('#locked').textContent = fullNumber(me.locked_balance);
+    $$('.js-profile-avatar').forEach((element) => { element.innerHTML = avatar(me); });
+    $$('.js-profile-name').forEach((element) => { element.textContent = me.username; });
+    $('#profile-tags').innerHTML = playerTags(me.tags) + siteTierBadges(me.tiers);
+    const wait = me.tiers_refresh_at ? `Refresh available ${new Date(me.tiers_refresh_at).toLocaleTimeString(undefined, { timeStyle: 'short' })}` : '';
+    $('#profile-tiers').innerHTML = tiersPanel(me.tiers, ['not_verified', 'no_account_id'].includes(me.tiers.status) ? (me.tiers.status === 'not_verified' ? '<button class="btn btn-small btn-primary" type="button" data-verify>Verify Minecraft</button>' : '') : `<button class="btn btn-small" type="button" data-tiers-refresh ${wait ? 'disabled' : ''}>${icon('refresh')}${wait || 'Refresh'}</button>`);
+    $('#connection-minecraft-note').textContent = me.minecraft_name_hint ? `MCPVP lists this account as ${me.minecraft_name_hint}. If you renamed, update your name so payments reach you.` : '';
+    $('#field-discord').value = me.username;
+    $('#field-id').value = me.discord_id;
+    $('#field-minecraft').value = verified ? me.minecraft_username : '';
+    $('#field-minecraft').placeholder = 'Not verified';
+    $('#field-minecraft-note').textContent = verified ? 'Deposits and payouts use this account' : 'Verify it under Connections to play, deposit, or enter tournaments';
+    $('#connection-discord').textContent = me.username;
+    $('#connection-minecraft').textContent = verified ? me.minecraft_username : 'Not verified';
+    $('#connection-minecraft-actions').innerHTML = verified ? `${me.minecraft_uuid ? '<button class="btn btn-small" type="button" data-rename>Update name</button>' : ''}<button class="btn btn-small btn-danger" type="button" data-disconnect>Disconnect</button>` : '<button class="btn btn-small btn-primary" type="button" data-verify>Verify</button>';
+    $$('[data-admin-only]').forEach((element) => { element.hidden = !me.is_owner; });
+    $('#paused-notice').hidden = me.features.wagers;
+    $('#break-status').textContent = me.break_until ? `You’re on a break until ${new Date(me.break_until).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}. It can be made longer, not shorter.` : 'Stops you creating or joining matches and depositing. You can still withdraw. It can’t be cancelled early.';
+    renderOnboarding(verified);
   });
-  $('#available-filter-count').textContent = openMatches.length;
-  $('#list').innerHTML = visible.length ? visible.map((m) => {
-    const isCrystal = /crystal|cpvp/i.test(String(m.game_mode || ''));
-    const modeLabel = isCrystal ? 'Crystal PvP' : 'Sword Duel';
-    const region = matchRegion(m.game_mode);
-    const wager = Number(m.wager_amount || 0);
-    const prize = Math.floor(wager * 1.8);
-    const matchUrl = escapeHtml(m.match_url || `/matches/${m.id}`);
-    return `<article class="premium-match-card reference-match-card ${isCrystal ? 'mode-crystal' : 'mode-sword'}">
-      <header><div><h2>1V1 ${modeLabel.toUpperCase()}</h2><span class="rule-chip">WIN BY 2</span></div>${currentUser?.id === m.creator_id ? `<a class="card-detail-icon" href="${matchUrl}" aria-label="Open your match">◎</a>` : `<button class="card-detail-icon" data-snipe="${escapeHtml(m.match_code || m.id)}" aria-label="Use a snipe to reveal this player's record" title="Snipe player">🎯</button>`}</header>
-      <div class="reference-chips"><span>${region}</span><strong>${isCrystal ? 'END CRYSTAL' : 'DIAMOND SWORD'}</strong></div>
-      <div class="reference-match-stats"><div><small>FIRST TO</small><b><i>⚑</i> ${escapeHtml(matchFirstTo(m))}</b></div><div><small>EXPIRES IN</small><b><i>◷</i> ${matchTimeLeft(m)}</b><em></em></div></div>
-      <div class="reference-economy"><div><small>ENTRY FEE</small><b>🟡 ${tokenMillions(wager)}</b></div><span>⟶</span><div><small>PRIZE</small><b>♛ ${tokenMillions(prize)}</b></div></div>
-      ${m.snipe_profile ? `<div class="snipe-profile"><span>SNIPED PLAYER</span><b>${escapeHtml(m.snipe_profile.username)}</b><strong>${Number(m.snipe_profile.wins || 0)}W · ${Number(m.snipe_profile.losses || 0)}L</strong></div>` : ''}
-      <footer><button class="join-premium" data-join="${escapeHtml(m.match_code || m.id)}">JOIN MATCH</button></footer>
-    </article>`;
-  }).join('') : `<div class="empty match-empty"><span>⚔</span><h2>No matching wagers found.</h2><p>Try another filter or create a new verified match.</p><button class="empty-create" type="button">Create a match</button></div>`;
-}
-function renderForm() {
-  const form = $('#form');
-  if (matchConfig.tab === 'game') form.innerHTML = `<label class="label">GAME MODE</label><div class="choice-grid"><button class="choice ${matchConfig.game === 'Crystal PvP' ? 'active' : ''}" data-game="Crystal PvP">CPvP<small>Crystal PvP</small></button><button class="choice ${matchConfig.game === 'Sword Duel' ? 'active' : ''}" data-game="Sword Duel">Sword<small>Sword Duel</small></button></div><label class="label">MODE</label><div class="summary"><b>1v1</b></div><label class="label">REGION</label><div class="choice-grid"><button class="choice ${matchConfig.region === 'EU' ? 'active' : ''}" data-region="EU">EU</button><button class="choice ${matchConfig.region === 'NAE' ? 'active' : ''}" data-region="NAE">NAE</button></div>`;
-  if (matchConfig.tab === 'settings') form.innerHTML = `<label class="label">FIRST TO</label><div class="choice-grid">${['1','2','3+2','5+2'].map(v => `<button class="choice ${matchConfig.firstTo === v ? 'active' : ''}" data-first="${v}">${v}</button>`).join('')}</div><label class="label">ROUND LEAD</label><div class="choice-grid">${[0,1,2,3,4].map(v => `<button class="choice ${matchConfig.lead === v ? 'active' : ''}" data-lead="${v}">${v}</button>`).join('')}</div><div class="summary">A lead of 4 means your opponent needs one round in first-to-5 while you need five.</div>`;
-  if (matchConfig.tab === 'amount') form.innerHTML = `<label class="label">WAGER AMOUNT</label><input class="amount" id="amount" type="number" min="1000000" step="1000000" value="${matchConfig.amount}"><div class="summary">Per player: <b>${matchConfig.amount.toLocaleString()}</b><br>Total pot: <b>${(matchConfig.amount * 2).toLocaleString()}</b><br>This amount is reserved from your available balance as soon as the match is published.</div>`;
-  form.querySelectorAll('[data-game]').forEach(b => b.onclick = () => { matchConfig.game = b.dataset.game; renderForm(); });
-  form.querySelectorAll('[data-region]').forEach(b => b.onclick = () => { matchConfig.region = b.dataset.region; renderForm(); });
-  form.querySelectorAll('[data-first]').forEach(b => b.onclick = () => { matchConfig.firstTo = b.dataset.first; renderForm(); });
-  form.querySelectorAll('[data-lead]').forEach(b => b.onclick = () => { matchConfig.lead = Number(b.dataset.lead); renderForm(); });
-  const amount = $('#amount'); if (amount) amount.oninput = () => { matchConfig.amount = Number(amount.value) || 1000000; };
-}
-async function load() {
-  const me = await api('/api/me');
-  currentUser = me;
-  $('#username').textContent = me.username; $('#profile-name').textContent = me.username; $('#profile-tags').innerHTML = renderPlayerTags(me.tags, '', me.tier_badge);
-  $('#menu-username').textContent = me.username;
-  $('#menu-discord-id').textContent = me.minecraft_username ? `Playing as ${me.minecraft_username}` : 'Minecraft not verified';
-  $('#balance').textContent = Number(me.balance).toLocaleString(); $('#wallet-balance').textContent = Number(me.balance).toLocaleString(); $('#locked').textContent = Number(me.locked_balance).toLocaleString(); $('#snipes').textContent = Number(me.snipes || 0);
-  const isMinecraftVerified = Boolean(me.minecraft_verified && me.minecraft_username);
-  $('#verify').hidden = isMinecraftVerified;
-  $('#minecraft-verified-badge').hidden = !isMinecraftVerified;
-  $('#minecraft-verified-badge').title = isMinecraftVerified ? `Verified as ${me.minecraft_username}` : '';
-  $('#verify2').hidden = isMinecraftVerified;
-  $('#profile-minecraft-verified').hidden = !isMinecraftVerified;
-  $('#profile-minecraft-verified').textContent = isMinecraftVerified ? `✓ Minecraft verified as ${me.minecraft_username}` : '';
-  const hasStaffPanel = Boolean(me.is_admin || me.is_helper);
-  $('#admin-nav').hidden = !hasStaffPanel;
-  $('#admin-nav-label').hidden = !hasStaffPanel;
-  $('#admin-nav').textContent = me.is_helper ? '♜ Helper Panel' : '♛ Admin Panel';
-  $('#admin-nav-label').textContent = me.is_helper ? 'STAFF TOOLS' : 'ADMINISTRATION';
-  $('#tournament-admin-shortcut').hidden = !me.is_admin;
-  document.querySelectorAll('.owner-admin-only').forEach((element) => { element.hidden = !me.is_admin; });
-  if (!hasStaffPanel && $('#admin').classList.contains('active')) showView('matches');
-  if (me.avatar_url) ['#avatar','#profile-avatar','#menu-avatar'].forEach(s => { const i=$(s); i.src=me.avatar_url; i.hidden=false; });
-  const [matches, recentMatches, announcements] = await Promise.all([api('/api/matches'), api('/api/me/matches').catch(() => []), api('/api/announcements').catch(() => ({ announcements: [] }))]);
-  openMatches = matches; renderOpenMatches(); renderSidebarMatches(recentMatches);
-  renderAnnouncements(announcements.announcements);
-}
-document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-view]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); document.querySelectorAll('.view').forEach(x=>x.classList.remove('active')); $('#'+b.dataset.view).classList.add('active'); if (b.dataset.view === 'admin') loadAdmin(); if (b.dataset.view === 'tournaments') loadTournaments(); });
-document.querySelectorAll('[data-sidebar-coming]').forEach((button) => button.onclick = () => toast(`${button.dataset.sidebarComing} is coming soon.`));
-$('#create').onclick = () => { matchConfig.tab='game'; document.querySelectorAll('[data-tab]').forEach(t=>t.classList.toggle('active',t.dataset.tab==='game')); renderForm(); $('#match-dialog').showModal(); };
-document.querySelectorAll('[data-match-filter]').forEach((button) => button.addEventListener('click', () => {
-  activeMatchFilter = button.dataset.matchFilter;
-  document.querySelectorAll('[data-match-filter]').forEach((item) => item.classList.toggle('active', item === button));
-  renderOpenMatches();
-}));
-document.querySelectorAll('[data-filter-type="status"]').forEach((button) => button.addEventListener('click', () => {
-  activeStatusFilter = button.dataset.filterValue;
-  document.querySelectorAll('[data-filter-type="status"]').forEach((item) => item.classList.toggle('active', item === button));
-  renderOpenMatches();
-}));
-$('#list').addEventListener('click', (event) => {
-  if (event.target.closest('.empty-create')) $('#create').click();
-  const snipe = event.target.closest('[data-snipe]');
-  if (snipe) useSnipe(snipe.dataset.snipe, snipe);
-});
-async function useSnipe(matchCode, button) {
-  if (!window.confirm('Use one snipe to reveal this player and their record?')) return;
-  button.disabled = true;
-  try { await api(`/api/matches/${encodeURIComponent(matchCode)}/snipe`, { method: 'POST' }); toast('Player record revealed.'); await load(); }
-  catch (error) { button.disabled = false; toast(error.message); }
-}
-document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { matchConfig.tab=b.dataset.tab; document.querySelectorAll('[data-tab]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); renderForm(); });
-document.querySelectorAll('[data-close]').forEach(b => b.onclick = () => b.closest('dialog').close());
-$('#submit').onclick = async () => { if (matchConfig.tab !== 'amount') { const order=['game','settings','amount']; const n=order.indexOf(matchConfig.tab)+1; matchConfig.tab=order[n]; document.querySelector(`[data-tab="${matchConfig.tab}"]`).click(); return; } try { const match = await api('/api/matches',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({wager_amount:matchConfig.amount,game_mode:`${matchConfig.game} · 1v1 · ${matchConfig.region}`,rules:`First to ${matchConfig.firstTo}, lead ${matchConfig.lead}`})}); location.href = match.match_url || `/matches/${match.id}`; } catch(e) { toast(e.message); } };
-async function copyMinecraftUsername(username) {
-  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(username);
-  const input = document.createElement('textarea');
-  input.value = username;
-  input.style.position = 'fixed';
-  input.style.opacity = '0';
-  document.body.append(input);
-  input.select();
-  document.execCommand('copy');
-  input.remove();
-}
-let playerSearchTimer = null;
-let playerSearchRequest = 0;
-function clearPlayerSearch() {
-  $('#player-search-results').hidden = true;
-  $('#player-search-results').innerHTML = '';
-}
-function renderPlayerSearch(players, query) {
-  const results = $('#player-search-results');
-  if (!players.length) {
-    results.innerHTML = `<div class="search-empty">No players found for “${escapeHtml(query)}”.</div>`;
-    results.hidden = false;
-    return;
+  function renderOnboarding(verified) {
+    const box = $('#onboarding');
+    const canPlay = verified && (me.balance >= MIN_WAGER || me.locked_balance > 0);
+    box.hidden = canPlay;
+    if (canPlay) return;
+    box.innerHTML = verified
+      ? '<div><h2>Add funds to start playing</h2><p>The smallest entry is 1M. Deposits are confirmed in game by the bot.</p></div><a class="btn btn-primary" href="/wallet">Make a deposit</a>'
+      : '<div><h2>Verify your Minecraft account</h2><p>You need a verified account to join matches, deposit, or enter tournaments.</p></div><button class="btn btn-primary" type="button" data-verify>Verify Minecraft</button>';
   }
-  results.innerHTML = players.map((player) => {
-    const identity = player.minecraft_username ? `Minecraft: ${escapeHtml(player.minecraft_username)}` : `Discord ID: ${escapeHtml(player.discord_id)}`;
-    const avatar = player.avatar_url ? `<img src="${escapeHtml(player.avatar_url)}" alt="">` : 'DW';
-    return `<button class="search-result" data-player-statistics="${escapeHtml(player.discord_id)}"><span class="search-result-avatar">${avatar}</span><span><b>${escapeHtml(player.username)}</b>${renderPlayerTags(player.tags, 'search-tags', player.tier_badge)}<small>${identity}</small></span></button>`;
-  }).join('');
-  results.hidden = false;
-}
-async function searchPlayers() {
-  const query = $('#player-search-input').value.trim();
-  if (query.length < 2) return clearPlayerSearch();
-  const requestNumber = ++playerSearchRequest;
-  try {
-    const result = await api(`/api/players/search?q=${encodeURIComponent(query)}`);
-    if (requestNumber === playerSearchRequest && $('#player-search-input').value.trim() === query) renderPlayerSearch(result.players, query);
-  } catch (error) {
-    if (requestNumber === playerSearchRequest) { $('#player-search-results').innerHTML = `<div class="search-empty">${escapeHtml(error.message)}</div>`; $('#player-search-results').hidden = false; }
+  async function loadMatches() {
+    const [open, ongoing, mine] = await Promise.all([api('/api/matches'), api('/api/matches?status=ongoing'), api('/api/me/matches')]);
+    openMatches = open; ongoingMatches = ongoing; myMatches = mine;
+    renderMatches(); renderRail();
+    if (location.pathname === '/profile/matches') renderProfileMatches();
   }
-}
-$('#player-search-input').addEventListener('input', () => {
-  clearTimeout(playerSearchTimer);
-  playerSearchTimer = setTimeout(searchPlayers, 220);
-});
-$('#player-search-input').addEventListener('focus', searchPlayers);
-$('#player-search-input').addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') { clearPlayerSearch(); event.currentTarget.blur(); }
-  if (event.key === 'Enter') { event.preventDefault(); const first = $('#player-search-results [data-player-statistics]'); if (first) first.click(); else searchPlayers(); }
-});
-$('#player-search-results').addEventListener('click', (event) => {
-  const result = event.target.closest('[data-player-statistics]');
-  if (!result) return;
-  $('#player-search-input').value = '';
-  clearPlayerSearch();
-  openStatistics(`/api/players/${encodeURIComponent(result.dataset.playerStatistics)}/statistics`, false);
-});
-document.addEventListener('pointerdown', (event) => { if (!event.target.closest('.player-search')) clearPlayerSearch(); });
-document.addEventListener('click', async e => {
-  const copy = e.target.closest('[data-copy-minecraft]');
-  if (copy) {
-    try { await copyMinecraftUsername(copy.dataset.copyMinecraft); toast(`Copied ${copy.dataset.copyMinecraft}.`); } catch { toast('Could not copy the Minecraft username.'); }
-    return;
+  async function loadAnnouncements() {
+    const { announcements } = await api('/api/announcements');
+    const feed = $('#announcement-feed');
+    feed.hidden = !announcements.length;
+    feed.innerHTML = announcements.slice(0, 2).map((item) => `<article class="announcement">${icon('megaphone')}<div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.message)}</p>${item.discord_message_url ? `<a class="text-link" href="${escapeHtml(item.discord_message_url)}" target="_blank" rel="noopener">View on Discord</a>` : ''}</div><time datetime="${escapeHtml(item.created_at)}">${timeAgo(item.created_at)}</time></article>`).join('');
   }
-  const b=e.target.closest('[data-join]');
-  if(!b)return;
-  const card=b.closest('.reference-match-card');
-  const original=b.textContent;
-  b.disabled=true;
-  b.textContent='JOINING…';
-  card?.classList.add('match-action-pending');
-  try{
-    const match=await api(`/api/matches/${b.dataset.join}/join`,{method:'POST'});
-    card?.classList.remove('match-action-pending');
-    card?.classList.add('match-action-success');
-    b.textContent='MATCH JOINED ✓';
-    toast('Match joined. Opening room…');
-    setTimeout(()=>{location.href=match.match_url||`/matches/${match.match_code||match.id}`;},420);
-  }catch(x){card?.classList.remove('match-action-pending');b.disabled=false;b.textContent=original;toast(x.message);}
-});
-let verificationPoll = null;
-function stopVerificationPoll() { if (verificationPoll) clearInterval(verificationPoll); verificationPoll = null; }
-function showVerificationForm(message) {
-  $('#verify-text').textContent = message || 'Enter the exact Minecraft username you will use to message DonutWagersBot.';
-  $('#verification-form').hidden = false;
-  $('#verification-pending').hidden = true;
-  $('#verification-success').hidden = true;
-}
-function showVerifiedMinecraft(username) {
-  stopVerificationPoll();
-  $('#verify-text').textContent = `Verified as ${username}.`;
-  $('#verification-form').hidden = true;
-  $('#verification-pending').hidden = true;
-  $('#verification-success').hidden = false;
-}
-async function pollVerification() {
-  try {
-    const status = await api('/api/minecraft/verification/status');
-    if (status.verified) {
-      showVerifiedMinecraft(status.minecraft_username);
-      load();
-      return;
-    }
-    if (!status.verification_pending) {
-      stopVerificationPoll();
-      $('#verification-status').textContent = 'This code expired or was replaced. Create a new code to try again.';
-      $('#verification-form').hidden = false;
-    }
-  } catch (error) { stopVerificationPoll(); }
-}
-async function verify() {
-  stopVerificationPoll();
-  try {
-    const status = await api('/api/minecraft/verification/status');
-    if (status.verified) showVerifiedMinecraft(status.minecraft_username);
-    else if (status.verification_pending) showVerificationForm(`A code for ${status.verification_minecraft_username} is already pending. Creating another code will replace it.`);
-    else showVerificationForm();
-    $('#verify-dialog').showModal();
-  } catch (error) { toast(error.message); }
-}
-$('#create-verification').onclick = async () => {
-  const button = $('#create-verification');
-  const username = $('#minecraft-username').value.trim();
-  button.disabled = true;
-  try {
-    const result = await api('/api/minecraft/verification/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ minecraft_username: username }) });
-    $('#verify-text').textContent = `Send this code from ${result.minecraft_username} within 10 minutes.`;
-    $('#verification-code').textContent = result.code;
-    $('#verification-command').textContent = `/msg ${result.bot_username} ${result.code}`;
-    $('#verification-form').hidden = true;
-    $('#verification-pending').hidden = false;
-    $('#verification-success').hidden = true;
-    $('#verification-status').textContent = 'Waiting for DonutWagersBot to confirm your private message…';
-    stopVerificationPoll();
-    verificationPoll = setInterval(pollVerification, 5000);
-    setTimeout(pollVerification, 800);
-  } catch (error) { toast(error.message); }
-  finally { button.disabled = false; }
-};
-$('#disconnect-minecraft').onclick = async () => {
-  try {
-    await api('/api/minecraft/disconnect', { method: 'POST' });
-    showVerificationForm('Minecraft was disconnected. You can verify another account now.');
-    load();
-  } catch (error) { toast(error.message); }
-};
-$('#verify-dialog').addEventListener('close', stopVerificationPoll);
-$('#verify').onclick=verify; $('#verify2').onclick=verify; load().catch(()=>location='/');
-
-function stopWalletTimers() {
-  if (walletTimer) clearInterval(walletTimer);
-  if (walletPoll) clearInterval(walletPoll);
-  walletTimer = null;
-  walletPoll = null;
-}
-function formatWalletAmount(value) { return Number(value || 0).toLocaleString(); }
-function parseWalletAmount(value) {
-  const normalized = String(value || '').trim().toLowerCase().replaceAll(',', '').replaceAll(' ', '');
-  const match = normalized.match(/^(-?\d+(?:\.\d+)?)([kmb])?$/);
-  if (!match) return null;
-  const multiplier = { k: 1_000, m: 1_000_000, b: 1_000_000_000 }[match[2]] || 1;
-  const amount = Number(match[1]) * multiplier;
-  return Number.isSafeInteger(amount) ? amount : null;
-}
-async function copyWalletText(value) {
-  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
-  const input = document.createElement('textarea');
-  input.value = value;
-  input.style.position = 'fixed';
-  input.style.opacity = '0';
-  document.body.append(input);
-  input.select();
-  document.execCommand('copy');
-  input.remove();
-}
-function showWithdrawal(withdrawal) {
-  stopWalletTimers();
-  const complete = withdrawal.status === 'completed';
-  const failed = withdrawal.status === 'failed';
-  $('#wallet-dialog-content').innerHTML = `<div class="wallet-confirmed withdrawal-state ${failed ? 'failed' : ''}"><div class="wallet-icon">${complete ? '✓' : failed ? '!' : '⇧'}</div><h3>${complete ? 'Withdrawal complete' : failed ? 'Withdrawal failed' : 'Sending your payout'}</h3><p>${complete ? `<b>${formatWalletAmount(withdrawal.amount)}</b> was paid to <b>${escapeHtml(withdrawal.minecraft_username)}</b>.` : failed ? escapeHtml(withdrawal.error || 'The payout could not be sent. Your balance was released.') : `DonutWagersBot is sending <b>${formatWalletAmount(withdrawal.amount)}</b> to <b>${escapeHtml(withdrawal.minecraft_username)}</b>. Keep the bot online.`}</p>${complete || failed ? '<button id="withdrawal-done" class="purple">Done</button>' : '<div class="withdrawal-pulse"><i></i> Processing automatically</div>'}</div>`;
-  if (complete || failed) {
-    $('#withdrawal-done').onclick = () => { $('#wallet-dialog').close(); load(); };
-  } else {
-    walletPoll = setInterval(async () => {
-      try {
-        const response = await api('/api/wallet/withdrawals/current');
-        if (response.withdrawal && response.withdrawal.status !== withdrawal.status) showWithdrawal(response.withdrawal);
-      } catch { /* Retry while the dialog is open. */ }
-    }, 4000);
-  }
-}
-async function renderWithdraw(message = '') {
-  stopWalletTimers();
-  try {
-    const response = await api('/api/wallet/withdrawals/current');
-    if (response.withdrawal && ['pending','processing'].includes(response.withdrawal.status)) return showWithdrawal(response.withdrawal);
-  } catch { /* The form below will display any new request error. */ }
-  const player = currentUser?.minecraft_username ? escapeHtml(currentUser.minecraft_username) : 'Minecraft verification required';
-  $('#wallet-dialog-content').innerHTML = `<div class="wallet-deposit-form withdrawal-form"><p class="wallet-hint">Minimum withdrawal is 15 million. Payouts are sent automatically by DonutWagersBot.</p>${message ? `<p class="wallet-error">${escapeHtml(message)}</p>` : ''}<label class="label" for="withdrawal-amount">AMOUNT TO WITHDRAW <small>minimum 15m</small></label><input id="withdrawal-amount" class="amount wallet-amount" inputmode="decimal" autocomplete="off" placeholder="15m"><p class="wallet-from">Paying to <b>${player}</b></p><button id="start-withdrawal" class="purple" ${currentUser?.minecraft_verified && walletBotOnline ? '' : 'disabled'}>Withdraw to Minecraft</button></div>`;
-  $('#start-withdrawal').onclick = async () => {
-    const amount = parseWalletAmount($('#withdrawal-amount').value);
-    if (!amount || amount < MIN_WITHDRAWAL_AMOUNT) return renderWithdraw('The minimum withdrawal is 15 million.');
-    const button = $('#start-withdrawal'); button.disabled = true; button.textContent = 'Creating withdrawal…';
+  /** Reload the lobby and anything else that can change while the page is open. */
+  async function refresh() {
     try {
-      const result = await api('/api/wallet/withdrawals', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amount }) });
-      showWithdrawal(result.withdrawal);
-    } catch (error) { renderWithdraw(error.message); }
-  };
-}
-function renderDepositForm(message = '') {
-  stopWalletTimers();
-  const player = currentUser?.minecraft_username ? escapeHtml(currentUser.minecraft_username) : 'Minecraft verification required';
-  const availabilityMessage = walletBotOnline ? message : 'DonutWagersBot is offline. Deposits will be available as soon as it reconnects.';
-  $('#wallet-dialog-content').innerHTML = `<div class="wallet-deposit-form">
-    <p class="wallet-hint">Minimum deposit is 100k. Use DonutSMP in-game currency only.</p>
-    ${availabilityMessage ? `<p class="wallet-error">${escapeHtml(availabilityMessage)}</p>` : ''}
-    <label class="label" for="wallet-amount">AMOUNT TO DEPOSIT <small>e.g. 1m · 500k</small></label>
-    <input id="wallet-amount" class="amount wallet-amount" inputmode="decimal" autocomplete="off" placeholder="1m">
-    <p class="wallet-from">Depositing from <b>${player}</b></p>
-    <button id="start-wallet-deposit" class="purple" ${currentUser?.minecraft_verified && walletBotOnline ? '' : 'disabled'}>Start Deposit</button>
-  </div>`;
-  $('#start-wallet-deposit').onclick = async () => {
-    const button = $('#start-wallet-deposit');
-    const amount = parseWalletAmount($('#wallet-amount').value);
-    if (!amount) return renderDepositForm('Enter an amount such as 1m or 500k.');
-    button.disabled = true;
-    button.textContent = 'Creating deposit…';
-    try {
-      const result = await api('/api/wallet/deposits', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amount }) });
-      renderDepositInstructions(result.deposit);
+      await Promise.all([loadMatches(), loadAnnouncements()]);
+      $('#connection-notice').hidden = true;
     } catch (error) {
-      if (error.data?.deposit) renderDepositInstructions(error.data.deposit);
-      else renderDepositForm(error.message);
+      if (handleAuthError(error)) return;
+      $('#connection-notice span').textContent = error.message;
+      $('#connection-notice').hidden = false;
+      if (!openMatches) $('#match-list').innerHTML = emptyState('alert', 'Matches didn’t load', 'Check your connection, then retry.');
     }
-  };
-}
-async function refreshWalletDeposit(deposit) {
-  try {
-    const response = await api('/api/wallet/deposits/current');
-    const current = response.deposit;
-    if (!current || current.id !== deposit.id) return;
-    if (current.status === 'verified') {
-      stopWalletTimers();
-      $('#wallet-dialog-content').innerHTML = `<div class="wallet-confirmed"><div class="wallet-icon">✓</div><h3>Deposit confirmed</h3><p><b>${formatWalletAmount(current.amount)}</b> was added to your DonutWagers balance.</p><button id="wallet-done" class="purple">Done</button></div>`;
-      $('#wallet-done').onclick = () => $('#wallet-dialog').close();
-      load();
-    } else if (current.status === 'expired') {
-      renderDepositForm('This deposit window expired. Start a new deposit when you are ready.');
+  }
+  /** After an action that moves money or changes the lobby. */
+  const refreshAll = () => Promise.all([refreshAccount(), refresh()]);
+  $('#retry-load').addEventListener('click', (event) => withBusy(event.currentTarget, refresh));
+
+  /* ---------- Navigation ---------- */
+  // Sections of this page each have their own address, so switching keeps the page loaded.
+  const viewOf = (pathname) => { const [, name, rest, extra] = pathname.split('/'); if (!VIEWS[name] || extra) return null; return rest === undefined || (name === 'profile' && PROFILE_TABS[rest]) ? name : null; };
+  function showView() {
+    const view = viewOf(location.pathname) || 'matches';
+    const entering = view !== currentView || !$('.view.active');
+    currentView = view;
+    $$('.view').forEach((section) => section.classList.toggle('active', section.id === view));
+    markActive(view);
+    document.documentElement.dataset.active = view;
+    document.title = `${VIEWS[view]} | DonutWagers`;
+    if (view !== 'wallet') stopWalletTimers();
+    if (view === 'profile') showProfileTab();
+    if (!entering) return 'inner';
+    ({ tournaments: () => loadTournaments(), leaderboard: loadLeaderboard, wallet: openWallet, admin: loadAdmin }[view])?.();
+    return 'view';
+  }
+
+  /* ---------- Matches ---------- */
+  function applyFilters(matches) {
+    const visible = matches.filter((match) => (filters.mode === 'all' || (filters.mode === 'crystal') === isCrystal(match)) && (filters.region === 'all' || matchRegion(match) === filters.region));
+    if (filters.sort === 'newest') return visible;
+    return [...visible].sort((a, b) => (filters.sort === 'high' ? b.wager_amount - a.wager_amount : a.wager_amount - b.wager_amount));
+  }
+  function cardHead(match, extra = '') {
+    return `<header><span class="mode-badge ${isCrystal(match) ? 'crystal' : 'sword'}">${modeItem(match)}</span><div><h3>${modeName(match)}</h3><p>1v1, ${matchRegion(match)}</p></div>${extra}</header>`;
+  }
+  function money(match) {
+    if (match.tournament_id) return `<div class="match-money"><div><small>Entry</small><b>Free</b></div>${icon('right')}<div><small>Event prize</small><b class="num">${shortAmount(match.tournament_prize)}</b></div></div>`;
+    return `<div class="match-money"><div><small>Entry</small><b class="num">${shortAmount(match.wager_amount)}</b></div>${icon('right')}<div><small>Winner gets</small><b class="num">${shortAmount(winnerPayout(match.wager_amount))}</b></div></div>`;
+  }
+  function openCard(match) {
+    const code = escapeHtml(match.match_code || match.id);
+    const sniped = match.snipe_profile;
+    return `<article class="match-card">${cardHead(match, match.is_creator ? '<span class="tag tag-gold">Yours</span>' : '')}${money(match)}
+      <div class="match-info"><div>${icon('flag')}${escapeHtml(matchTerms(match).label)}</div><div>${icon('clock')}<span data-expires="${escapeHtml(match.expires_at)}"></span></div></div>
+      ${sniped ? `<div class="snipe-result">${snipeIcon}${tierBadge(match.creator_tier, { showEmpty: true })}<b>${escapeHtml(sniped.username)}</b><span class="num">${fullNumber(sniped.wins)}W ${fullNumber(sniped.losses)}L</span></div>` : ''}
+      <footer>${match.is_creator ? `<a class="btn" href="${escapeHtml(matchHref(match))}">Open room</a>` : `<button class="btn btn-primary" type="button" data-join="${code}">Join match</button>${sniped || !me.features.snipes ? '' : `<button class="btn btn-icon" type="button" data-snipe="${code}" aria-label="Use a snipe to reveal this player" title="Use a snipe to reveal this player">${snipeIcon}</button>`}`}</footer></article>`;
+  }
+  function ongoingCard(match) {
+    const hidden = 'Hidden until ready';
+    const name = (value, tier) => (value === hidden ? '<span class="muted">Hidden</span>' : `<span class="versus-player">${tierBadge(tier)}<span>${escapeHtml(value || 'Waiting')}</span></span>`);
+    return `<article class="match-card">${cardHead(match, statusTag(match))}<div class="versus">${name(match.creator, match.creator_tier)}<i>vs</i>${name(match.opponent, match.opponent_tier)}</div>${money(match)}
+      <div class="match-info"><div>${icon('flag')}${escapeHtml(matchTerms(match).label)}</div></div>
+      <footer><a class="btn ${match.viewer_is_participant ? 'btn-primary' : ''}" href="${escapeHtml(matchHref(match))}">${match.viewer_is_participant ? 'Go to your match' : 'View match'}</a></footer></article>`;
+  }
+  /** Empty lobby: one clear action and nothing else competing with it. */
+  function lobbyEmpty() {
+    return `<div class="lobby-empty panel">${icon('swords')}<h3>No open matches</h3><p>Create one and it stays listed for 30 minutes. Your entry comes back if nobody joins.</p><button class="btn btn-primary" type="button" data-create>${icon('plus')}Create Match</button></div>`;
+  }
+  let lastMatchMarkup = '';
+  function renderMatches() {
+    if (!openMatches) return;
+    $('#available-count').textContent = openMatches.length || '';
+    $('#ongoing-count').textContent = ongoingMatches.length || '';
+    const open = filters.status === 'available';
+    const source = open ? openMatches : ongoingMatches;
+    const visible = applyFilters(source);
+    let markup;
+    if (visible.length) markup = visible.map(open ? openCard : ongoingCard).join('');
+    else if (source.length) markup = emptyState('search', 'Nothing fits those filters', 'Try another mode or region.', '<button class="btn" type="button" data-clear-filters>Clear filters</button>');
+    else markup = open ? lobbyEmpty() : emptyState('swords', 'No matches in progress', 'Live duels appear here once two players are in a room.');
+    // Skipping identical markup keeps focus and hover stable between background refreshes.
+    if (markup !== lastMatchMarkup || $('#match-list .skeleton')) { $('#match-list').innerHTML = markup; lastMatchMarkup = markup; }
+    tickExpiry();
+  }
+  function tickExpiry() {
+    let expired = false;
+    $$('[data-expires]').forEach((element) => {
+      const left = new Date(element.dataset.expires).getTime() - Date.now();
+      element.textContent = left > 0 ? `Closes in ${clock(left)}` : 'Closing';
+      element.classList.toggle('is-late', left < 5 * 60_000);
+      if (left <= 0) expired = true;
+    });
+    return expired;
+  }
+  page.interval(() => { if (!document.hidden) tickExpiry(); }, 1000);
+
+  function needsAction(match) {
+    if (match.status === 'READY_UP') return match.viewer_ready ? 'Waiting for opponent' : 'Ready up';
+    if (match.status === 'IN_PROGRESS') return match.opponent_has_reported && !match.viewer_reported_winner_id ? 'Confirm the result' : 'In progress';
+    if (match.status === 'DISPUTED') return 'In dispute';
+    return 'Waiting for opponent';
+  }
+  function renderRail() {
+    const active = myMatches.filter((match) => !['COMPLETED', 'CANCELLED'].includes(match.status)).slice(0, 4);
+    $('#rail-active').hidden = !active.length;
+    $('#rail-active-list').innerHTML = active.map((match) => {
+      const label = needsAction(match);
+      return `<a class="rail-row ${['Ready up', 'Confirm the result'].includes(label) ? 'needs-action' : ''}" href="${escapeHtml(matchHref(match))}">${modeItem(match)}<span>${modeName(match)}<small>${label}</small></span><b class="num">${match.tournament_id ? 'Event' : shortAmount(match.wager_amount)}</b></a>`;
+    }).join('');
+    const pool = openMatches.reduce((total, match) => total + Number(match.wager_amount || 0), 0);
+    $('#rail-lobby').innerHTML = [['Open matches', fullNumber(openMatches.length)], ['In progress', fullNumber(ongoingMatches.length)], ['Entries waiting', shortAmount(pool)]].map(([label, value]) => `<div><dt>${label}</dt><dd class="num">${value}</dd></div>`).join('');
+  }
+  /** Slower-moving rail content, loaded once per visit instead of on every refresh. */
+  async function loadRail() {
+    const [boardResult, eventResult] = await Promise.allSettled([api('/api/leaderboard?period=week&sort=earned'), api('/api/tournaments')]);
+    const players = boardResult.status === 'fulfilled' ? boardResult.value.players.slice(0, 5) : [];
+    $('#rail-top').innerHTML = players.length ? players.map((player) => `<button class="rail-row" type="button" data-player="${escapeHtml(player.discord_id)}">${avatar(player)}<span>${escapeHtml(player.username)}<small>${player.wins}–${player.losses}</small></span><b class="num is-money">${shortAmount(player.earned)}</b></button>`).join('') : '<p class="rail-empty">No settled matches this week yet.</p>';
+    const event = eventResult.status === 'fulfilled' ? eventResult.value.tournaments.find((item) => item.status === 'OPEN') || eventResult.value.tournaments.find((item) => item.status === 'IN_PROGRESS') : null;
+    $('#rail-event').hidden = !event;
+    if (event) $('#rail-event-body').innerHTML = `<a class="rail-row" href="/tournaments">${icon('trophy')}<span>${escapeHtml(event.name)}<small>${event.status === 'OPEN' ? `${event.registered_count} of ${event.max_players} registered` : 'In progress'}</small></span><b class="num is-money">${shortAmount(event.winner_prize)}</b></a>`;
+  }
+  $$('[data-status]').forEach((button) => button.addEventListener('click', () => { filters.status = button.dataset.status; setPressed($$('[data-status]'), button); renderMatches(); }));
+  $$('[data-mode]').forEach((button) => button.addEventListener('click', () => selectGame(button.dataset.mode)));
+  function applyGame(game) { filters.mode = game; setPressed($$('[data-mode]'), $(`[data-mode="${game}"]`)); renderMatches(); }
+  gameListeners.add(applyGame);
+  $$('[data-region]').forEach((button) => button.addEventListener('click', () => { filters.region = button.dataset.region; setPressed($$('[data-region]'), button); renderMatches(); }));
+  $('#sort-matches').addEventListener('change', (event) => { filters.sort = event.target.value; renderMatches(); });
+
+  async function joinMatch(code, button) {
+    const match = openMatches.find((item) => (item.match_code || item.id) === code);
+    if (!match) return;
+    if (!await ensureAllowed('wagers')) return;
+    if (!me.minecraft_verified) { openVerify(); return; }
+    if (me.balance < match.wager_amount) { toast(`You need ${fullNumber(match.wager_amount - me.balance)} more to join this match.`, true); return; }
+    const agreed = await confirmDialog({
+      title: `Join this ${modeName(match)} match?`,
+      body: 'Your entry is locked as soon as you join.',
+      rows: [['Region', matchRegion(match)], ['Terms', matchTerms(match).label], ['Your entry', fullNumber(match.wager_amount)], ['Balance after joining', fullNumber(me.balance - match.wager_amount)], ['Winner receives', fullNumber(winnerPayout(match.wager_amount)), true]],
+      confirm: 'Join match',
+    });
+    if (!agreed) return;
+    await withBusy(button, async () => {
+      try {
+        const joined = await post(`/api/matches/${encodeURIComponent(code)}/join`);
+        navigate(matchHref(joined));
+      } catch (error) { loadMatches().catch(() => undefined); throw error; }
+    });
+  }
+  async function useSnipe(code, button) {
+    if (me.snipes < 1) { toast('You have no snipes left.', true); return; }
+    const agreed = await confirmDialog({ title: 'Use a snipe?', image: snipeIcon, body: 'You’ll see who created this match and their record.', rows: [['Snipes left after this', fullNumber(me.snipes - 1)]], confirm: 'Reveal player' });
+    if (!agreed) return;
+    await withBusy(button, async () => { await post(`/api/matches/${encodeURIComponent(code)}/snipe`); await refreshAll(); });
+  }
+
+  /* ---------- Create match ---------- */
+  const draft = { game: 'Crystal PvP', region: 'EU', firstTo: '5+2', lead: 0, amount: 1_000_000 };
+  function renderDraft() {
+    const target = Number.parseInt(draft.firstTo, 10);
+    if (draft.lead >= target) draft.lead = 0;
+    $$('[data-choice]').forEach((group) => $$('button', group).forEach((button) => {
+      button.setAttribute('aria-pressed', String(String(draft[group.dataset.choice]) === button.value));
+      if (group.dataset.choice === 'lead') button.disabled = Number(button.value) >= target;
+    }));
+    const kit = draft.game === 'Crystal PvP' ? 'crystal' : 'sword';
+    const mine = me.tiers.rankings.find((item) => item.kit === kit) || { kit, label: kit === 'crystal' ? 'Crystal' : 'Sword', tier: null, status: me.tiers.status === 'ranked' ? 'unranked' : me.tiers.status, source: me.tiers.source, synced_at: me.tiers.synced_at, stale: me.tiers.stale };
+    $('#create-tier').innerHTML = `${tierBadge(mine, { showEmpty: true })}<span>Your ${mine.label} tier: <b>${escapeHtml(mine.tier ? mine.name : TIER_STATES[mine.status])}</b></span>`;
+    const theirs = target - draft.lead;
+    $('#lead-help').textContent = draft.lead ? `Your opponent needs ${theirs} round${theirs === 1 ? '' : 's'}. You need ${target}.` : `Both players start level and need ${target} round${target === 1 ? '' : 's'}.`;
+    const amount = draft.amount;
+    const valid = Number.isSafeInteger(amount) && amount >= MIN_WAGER;
+    const affordable = valid && amount <= me.balance;
+    const hint = $('#match-amount-hint');
+    hint.textContent = !valid ? 'Enter at least 1M. You can type 5m or 5,000,000.' : affordable ? `You have ${fullNumber(me.balance)} available.` : `That’s more than your available ${fullNumber(me.balance)}.`;
+    hint.style.color = valid && !affordable ? 'var(--bad)' : '';
+    $('#match-balance-after').textContent = affordable ? fullNumber(me.balance - amount) : '–';
+    $('#match-fee').textContent = valid ? fullNumber(amount * 2 - winnerPayout(amount)) : '–';
+    $('#match-payout').textContent = valid ? fullNumber(winnerPayout(amount)) : '–';
+    $('#match-submit').disabled = !affordable;
+  }
+  async function openCreate() {
+    if (!await ensureAllowed('wagers')) return;
+    if (!me.minecraft_verified) { toast('Verify your Minecraft account first.'); openVerify(); return; }
+    $('#match-amount').value = fullNumber(draft.amount || MIN_WAGER);
+    if (!draft.amount) draft.amount = MIN_WAGER;
+    renderDraft();
+    $('#match-dialog').showModal();
+  }
+  $('#create').addEventListener('click', openCreate);
+  $$('[data-choice]').forEach((group) => group.addEventListener('click', (event) => {
+    const button = event.target.closest('button');
+    if (!button || button.disabled) return;
+    draft[group.dataset.choice] = group.dataset.choice === 'lead' ? Number(button.value) : button.value;
+    renderDraft();
+  }));
+  $('#match-amount').addEventListener('input', (event) => { draft.amount = parseAmount(event.target.value); renderDraft(); });
+  $('#amount-chips').addEventListener('click', (event) => {
+    const button = event.target.closest('button');
+    if (!button) return;
+    draft.amount = Number(button.value);
+    $('#match-amount').value = fullNumber(draft.amount);
+    renderDraft();
+  });
+  $('#match-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    if ($('#match-submit').disabled) return;
+    withBusy($('#match-submit'), async () => {
+      const match = await post('/api/matches', { wager_amount: draft.amount, game_mode: `${draft.game} · 1v1 · ${draft.region}`, rules: `First to ${draft.firstTo}, lead ${draft.lead}` });
+      navigate(matchHref(match));
+    });
+  });
+
+  /* ---------- Profile ---------- */
+  function showProfileTab() {
+    const tab = location.pathname.split('/')[2] || 'overview';
+    const changed = $(`#pane-${tab}`).hidden;
+    $$('[role="tab"]').forEach((link) => {
+      const selected = link.id === `tab-${tab}`;
+      link.setAttribute('aria-selected', String(selected));
+      link.tabIndex = selected ? 0 : -1;
+    });
+    $$('.tab-pane').forEach((pane) => { pane.hidden = pane.id !== `pane-${tab}`; });
+    if (changed) playEnter($(`#pane-${tab}`));
+    moveUnderline();
+    document.title = `${PROFILE_TABS[tab]} | DonutWagers`;
+    ({ overview: loadProfile, matches: renderProfileMatches, transactions: loadTransactions }[tab])?.();
+  }
+  function moveUnderline() {
+    const link = $('[role="tab"][aria-selected="true"]');
+    if (!link?.offsetWidth) return;
+    const line = $('#tab-underline');
+    line.style.width = `${link.offsetWidth}px`;
+    line.style.transform = `translateX(${link.offsetLeft}px)`;
+    link.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+  page.on(window, 'resize', moveUnderline);
+  document.fonts?.ready.then(moveUnderline);
+  $('.tabs').addEventListener('keydown', (event) => {
+    const links = $$('[role="tab"]');
+    const next = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
+    if (!next) return;
+    event.preventDefault();
+    const link = links[(links.indexOf(document.activeElement) + next + links.length) % links.length];
+    navigate(link.href).then(() => link.focus());
+  });
+  $('#profile-statistics').addEventListener('click', () => openStatistics());
+  // A match marked in the dialog shows here straight away.
+  page.on(document, 'statistics-changed', () => { if ($('#profile-stats').children.length) loadProfile(); });
+  async function loadProfile() {
+    if (!$('#profile-stats').children.length) $('#profile-stats').innerHTML = skeletons(3);
+    try {
+      const stats = await api('/api/me/statistics');
+      $('#profile-since').textContent = `Member since ${memberSince(stats.member_since)}`;
+      $('#field-since').value = memberSince(stats.member_since);
+      $('#profile-stats').innerHTML = `<div class="stats-view">${statsCards(stats)}${featuredCard(stats, true)}</div>`;
+    } catch (error) { $('#profile-stats').innerHTML = `<div class="notice notice-bad">${icon('alert')}<span>${escapeHtml(error.message)}</span></div>`; }
+  }
+  async function loadTransactions() {
+    const box = $('#profile-transactions');
+    if (!box.children.length) box.innerHTML = skeletons(1);
+    try {
+      const { entries } = await api('/api/wallet/history');
+      box.innerHTML = entries.length ? `<div class="form-card table-wrap"><table><thead><tr><th>Type</th><th class="col-optional">Date</th><th>Status</th><th class="right">Amount</th></tr></thead><tbody>${entries.map((entry) => {
+        const [label, iconName] = HISTORY_LABELS[entry.type] || [entry.type, 'info'];
+        const isVoid = ['expired', 'failed'].includes(entry.status);
+        const [state, tone] = { pending: ['Waiting', 'gold'], processing: ['Sending', 'gold'], review: ['Staff check', 'gold'], expired: ['Expired', ''], failed: ['Failed', 'bad'] }[entry.status] || ['Complete', 'good'];
+        const name = escapeHtml(entry.label || label);
+        return `<tr><td><span class="type-cell">${icon(iconName)}${entry.match_url ? `<a class="text-link" href="${escapeHtml(entry.match_url)}">${name}</a>` : name}</span></td><td class="col-optional muted">${escapeHtml(new Date(entry.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }))}</td><td><span class="tag ${tone ? `tag-${tone}` : ''}">${state}</span></td><td class="right num ${isVoid ? 'is-void' : entry.amount > 0 ? 'result-win' : ''}">${entry.amount > 0 ? '+' : '−'}${fullNumber(Math.abs(entry.amount))}</td></tr>`;
+      }).join('')}</tbody></table></div>` : emptyState('card', 'No transactions yet', 'Deposits, withdrawals, and match results will be listed here.', '<a class="btn" href="/wallet">Open your wallet</a>');
+    } catch (error) { box.innerHTML = `<div class="notice notice-bad">${icon('alert')}<span>${escapeHtml(error.message)}</span></div>`; }
+  }
+  function renderProfileMatches() {
+    const box = $('#profile-matches');
+    if (!myMatches.length) { box.innerHTML = emptyState('swords', 'No matches yet', 'Your duels and their results will be listed here.', '<a class="btn btn-primary" href="/matches">Browse matches</a>'); return; }
+    box.innerHTML = `<div class="form-card table-wrap"><table><thead><tr><th>Match</th><th class="col-optional">Date</th><th>Opponent</th><th class="right col-optional">Entry</th><th class="right">Result</th></tr></thead><tbody>${myMatches.map((match) => {
+      const opponent = match.is_creator ? match.opponent : match.creator;
+      const won = match.status === 'COMPLETED' && match.winner_id === me.id;
+      const gain = money0(match, won);
+    const opponentTier = match.is_creator ? match.opponent_tier : match.creator_tier;
+      const result = match.status === 'COMPLETED' ? `<span class="${won ? 'result-win' : 'result-loss'} num">${won ? 'Won' : 'Lost'}${gain}</span>` : statusTag(match);
+      return `<tr><td><a class="text-link" href="${escapeHtml(matchHref(match))}">${modeName(match)}</a> <span class="muted">${matchRegion(match)}</span></td><td class="col-optional muted">${escapeHtml(new Date(match.settled_at || match.cancelled_at || match.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }))}</td><td>${opponent === 'Hidden until ready' || !opponent ? '<span class="muted">–</span>' : `<span class="versus-player">${tierBadge(opponentTier)}<span>${escapeHtml(opponent)}</span></span>`}</td><td class="right num col-optional">${match.tournament_id ? 'Free' : shortAmount(match.wager_amount)}</td><td class="right">${result}</td></tr>`;
+    }).join('')}</tbody></table></div>`;
+  }
+  function money0(match, won) {
+    if (!match.wager_amount) return '';
+    return won ? ` +${shortAmount(Number(match.payout_amount || 0) - match.wager_amount)}` : ` −${shortAmount(match.wager_amount)}`;
+  }
+
+  /* ---------- Leaderboard ---------- */
+  const board = { sort: 'wins', period: 'all' };
+  let boardRequest = 0;
+  async function loadLeaderboard() {
+    const request = ++boardRequest;
+    const box = $('#leaderboard-content');
+    try {
+      const { players, viewer } = await api(`/api/leaderboard?sort=${board.sort}&period=${board.period}`);
+      if (request !== boardRequest) return;
+      if (!players.length) { box.innerHTML = emptyState('trophy', 'Nobody has settled a match yet', board.period === 'all' ? 'The first winner takes the top spot.' : 'Try a longer period.', '<a class="btn btn-primary" href="/matches">Browse matches</a>'); return; }
+      const score = (row) => (board.sort === 'wins' ? `<strong class="num">${fullNumber(row.wins)}</strong> ${row.wins === 1 ? 'win' : 'wins'}` : `<strong class="num">${shortAmount(row.earned)}</strong> won`);
+      const podium = players.slice(0, 3).map((row, index) => `<button class="panel ${index ? '' : 'first'}" type="button" data-player="${escapeHtml(row.discord_id)}">${avatar(row)}<b>${index + 1}. ${escapeHtml(row.username)}</b>${siteTierBadges(row.tiers, { interactive: false })}<span class="score">${score(row)}</span></button>`).join('');
+      const rowHtml = (row) => `<tr class="${row.is_viewer ? 'is-viewer' : ''}"><td class="num">${row.rank}</td><td><button class="player-cell" type="button" data-player="${escapeHtml(row.discord_id)}">${avatar(row)}<span>${escapeHtml(row.username)}${row.is_viewer ? ' (you)' : ''}</span>${siteTierBadges(row.tiers, { interactive: false })}</button></td><td class="right num">${row.wins}–${row.losses}</td><td class="right num col-optional">${Math.round((row.wins / (row.wins + row.losses || 1)) * 100)}%</td><td class="right num">${shortAmount(row.earned)}</td></tr>`;
+      const below = viewer && viewer.rank > players.length ? rowHtml(viewer) : '';
+      box.innerHTML = `<div class="podium">${podium}</div><div class="panel table-wrap"><table><thead><tr><th>Rank</th><th>Player</th><th class="right">Record</th><th class="right col-optional">Win rate</th><th class="right">Winnings</th></tr></thead><tbody>${players.map(rowHtml).join('')}${below}</tbody></table></div>${viewer ? '' : '<p class="field-hint" style="margin-top:14px">You’ll be ranked once you settle a match in this period.</p>'}`;
+    } catch (error) { if (request === boardRequest) box.innerHTML = emptyState('alert', 'The leaderboard didn’t load', error.message); }
+  }
+  $$('[data-board-sort]').forEach((button) => button.addEventListener('click', () => { board.sort = button.dataset.boardSort; setPressed($$('[data-board-sort]'), button); loadLeaderboard(); }));
+  $$('[data-board-period]').forEach((button) => button.addEventListener('click', () => { board.period = button.dataset.boardPeriod; setPressed($$('[data-board-period]'), button); loadLeaderboard(); }));
+
+  /* ---------- Wallet ---------- */
+  let walletTab = 'deposit';
+  let walletTimer = null;
+  let walletPoll = null;
+  let walletRequest = 0;
+  let botOnline = false;
+  function stopWalletTimers() { clearInterval(walletTimer); clearInterval(walletPoll); walletTimer = walletPoll = null; walletRequest += 1; }
+  async function openWallet() {
+    stopWalletTimers();
+    loadHistory();
+    const request = walletRequest;
+    const content = $('#wallet-content');
+    if (!content.children.length) content.innerHTML = skeletons(1);
+    try {
+      const [bot, current] = await Promise.all([api('/api/bot/status'), api(walletTab === 'deposit' ? '/api/wallet/deposits/current' : '/api/wallet/withdrawals/current')]);
+      if (request !== walletRequest) return;
+      botOnline = bot.status === 'ONLINE';
+      $('#bot-status').className = `tag ${botOnline ? 'tag-good' : 'tag-bad'}`;
+      $('#bot-status').textContent = botOnline ? 'Bot online' : 'Bot offline';
+      if (walletTab === 'deposit') { if (current.deposit?.status === 'pending') showDeposit(current.deposit); else depositForm(); }
+      else if (['pending', 'processing', 'review'].includes(current.withdrawal?.status)) showWithdrawal(current.withdrawal);
+      else withdrawForm();
+    } catch (error) { if (request === walletRequest) content.innerHTML = `<div class="notice notice-bad">${icon('alert')}<span>${escapeHtml(error.message)}</span></div>`; }
+  }
+  function walletGate(action) {
+    if (!me.features[action === 'deposit' ? 'deposits' : 'withdrawals']) return `<div class="notice notice-warn">${icon('info')}<span>${action === 'deposit' ? 'Deposits are switched off right now.' : 'Withdrawals are paused right now. Your balance is safe.'}</span></div>`;
+    if (action === 'deposit' && me.break_until) return `<div class="notice notice-warn">${icon('info')}<span>You’re taking a break, so deposits are off until ${escapeHtml(new Date(me.break_until).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }))}. You can still withdraw.</span></div>`;
+    if (!me.minecraft_verified) return `<div class="notice notice-warn">${icon('shield')}<span>Verify your Minecraft account before you ${action}.</span></div><button class="btn btn-primary" type="button" data-verify>Verify Minecraft</button>`;
+    if (!botOnline) return `<div class="notice notice-warn">${icon('alert')}<span>The bot is offline, so you can’t ${action} right now. Try again once it reconnects.</span></div><button class="btn" type="button" data-wallet-retry>Check again</button>`;
+    return '';
+  }
+  function depositForm(message = '') {
+    stopWalletTimers();
+    const gate = walletGate('deposit');
+    $('#wallet-content').innerHTML = gate || `${message ? `<div class="notice notice-warn">${icon('info')}<span>${escapeHtml(message)}</span></div>` : ''}
+      <form id="deposit-form" class="form-stack" novalidate><label class="field"><span>Amount to deposit</span><input name="amount" class="input input-large" inputmode="decimal" autocomplete="off" placeholder="5m"><small>Minimum 100K. You can type 500k, 5m, or the full number.</small></label>
+      <dl id="deposit-summary" class="summary-list" hidden></dl>
+      <p class="field-hint">Paying from <b>${escapeHtml(me.minecraft_username)}</b>. Payments from any other account can’t be matched.</p><button class="btn btn-primary" type="submit">Start deposit</button></form>`;
+    $('#deposit-form')?.elements.amount.addEventListener('input', (event) => {
+      const amount = parseAmount(event.target.value);
+      const summary = $('#deposit-summary');
+      summary.hidden = !amount || amount < MIN_DEPOSIT || !me.pay_tax_percent;
+      if (!summary.hidden) summary.innerHTML = `<div><dt>Added to your balance</dt><dd class="num">${fullNumber(amount)}</dd></div><div><dt>DonutSMP fee (${me.pay_tax_percent}% of what you send)</dt><dd class="num">${fullNumber(sendWithTax(amount) - amount)}</dd></div><div class="total"><dt>You send</dt><dd class="num">${fullNumber(sendWithTax(amount))}</dd></div>`;
+    });
+    $('#deposit-form')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.target;
+      const amount = parseAmount(form.elements.amount.value);
+      if (!amount || amount < MIN_DEPOSIT) { toast('Enter at least 100K.', true); event.target.elements.amount.focus(); return; }
+      if (!await ensureAllowed('deposits')) return;
+      withBusy($('button', form), async () => {
+        try { showDeposit((await post('/api/wallet/deposits', { amount })).deposit); }
+        catch (error) { if (error.data?.deposit) { showDeposit(error.data.deposit); toast(error.message); } else throw error; }
+      });
+    });
+  }
+  function showDeposit(deposit) {
+    stopWalletTimers();
+    const command = `/pay ${deposit.recipient} ${deposit.send_amount}`;
+    const taxed = deposit.send_amount > deposit.amount;
+    $('#wallet-content').innerHTML = `<h2>Pay the bot in game</h2><p class="muted">On DonutSMP, run this exact command as <b>${escapeHtml(deposit.minecraft_username)}</b>:</p>
+      <button class="command" type="button" data-copy="${escapeHtml(command)}"><code>${escapeHtml(command)}</code>${icon('copy')}</button>
+      ${taxed ? `<p class="field-hint">That includes DonutSMP’s ${me.pay_tax_percent}% fee, so <b>${fullNumber(deposit.amount)}</b> reaches your balance. Send exactly this amount.</p>` : ''}
+      <div><span class="field-label">Time left</span><div id="deposit-countdown" class="display num countdown"></div></div><p class="waiting">Waiting for the bot to confirm your payment</p>`;
+    const check = async () => {
+      const request = walletRequest;
+      try {
+        const current = (await api('/api/wallet/deposits/current')).deposit;
+        if (request !== walletRequest || current?.id !== deposit.id) return;
+        if (current.status === 'verified') {
+          stopWalletTimers();
+          $('#wallet-content').innerHTML = `<div class="notice notice-good">${icon('check')}<span><b>${fullNumber(current.amount)}</b> was added to your balance.</span></div><a class="btn btn-primary" href="/matches">Find a match</a><button class="btn" type="button" data-wallet-retry>Make another deposit</button>`;
+          loadHistory(); refreshAccount();
+        } else if (current.status === 'expired') depositForm('That deposit expired before a payment arrived. Start a new one when you’re ready.');
+      } catch { /* The next check retries. */ }
+    };
+    let checkedExpiry = false;
+    const tick = () => {
+      const left = new Date(deposit.expires_at).getTime() - Date.now();
+      $('#deposit-countdown').textContent = clock(left);
+      if (left <= 0 && !checkedExpiry) { checkedExpiry = true; check(); }
+    };
+    tick();
+    walletTimer = page.interval(tick, 1000);
+    walletPoll = page.interval(check, 5000);
+  }
+  function withdrawForm() {
+    stopWalletTimers();
+    const gate = walletGate('withdraw');
+    $('#wallet-content').innerHTML = gate || `<form id="withdraw-form" class="form-stack" novalidate><label class="field"><span>Amount to withdraw</span><input name="amount" class="input input-large" inputmode="decimal" autocomplete="off" placeholder="15m"><small>Minimum 15M. You have ${fullNumber(me.balance)} available.</small></label>
+      <p class="field-hint">Paid in game to <b>${escapeHtml(me.minecraft_username)}</b>.${me.pay_tax_percent ? ` DonutSMP keeps ${me.pay_tax_percent}% of every payment, so you receive a little less than you withdraw.` : ''}</p><button class="btn btn-primary" type="submit" ${me.balance < MIN_WITHDRAWAL ? 'disabled' : ''}>Withdraw</button>${me.balance < MIN_WITHDRAWAL ? '<p class="field-hint">You can withdraw once your available balance reaches 15M.</p>' : ''}</form>`;
+    $('#withdraw-form')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.target;
+      const amount = parseAmount(form.elements.amount.value);
+      if (!amount || amount < MIN_WITHDRAWAL) { toast('The minimum withdrawal is 15M.', true); form.elements.amount.focus(); return; }
+      if (amount > me.balance) { toast(`You only have ${fullNumber(me.balance)} available.`, true); return; }
+      const fee = me.pay_tax_percent ? [[`DonutSMP fee (${me.pay_tax_percent}%)`, `about ${fullNumber(amount - receiveAfterTax(amount))}`], ['You receive in game', `about ${fullNumber(receiveAfterTax(amount))}`, true]] : [['Amount', fullNumber(amount), true]];
+      if (!await confirmDialog({ title: 'Withdraw to Minecraft?', rows: [['Paid to', me.minecraft_username], ['Taken from your balance', fullNumber(amount)], ['Balance after', fullNumber(me.balance - amount)], ...fee], confirm: 'Withdraw' })) return;
+      withBusy($('button', form), async () => { const result = await post('/api/wallet/withdrawals', { amount }); showWithdrawal(result.withdrawal); refreshAccount(); });
+    });
+  }
+  function showWithdrawal(withdrawal) {
+    stopWalletTimers();
+    const amount = fullNumber(withdrawal.amount);
+    const name = escapeHtml(withdrawal.minecraft_username);
+    if (withdrawal.status === 'completed') $('#wallet-content').innerHTML = `<div class="notice notice-good">${icon('check')}<span><b>${amount}</b> was paid to ${name}${withdrawal.arrives_at_least < withdrawal.amount ? `. After DonutSMP’s fee, about ${fullNumber(withdrawal.arrives_at_least)} arrived` : ''}.</span></div><button class="btn" type="button" data-wallet-retry>Done</button>`;
+    else if (withdrawal.status === 'failed') $('#wallet-content').innerHTML = `<div class="notice notice-bad">${icon('alert')}<span>${escapeHtml(withdrawal.error || 'The payout could not be sent.')} Your balance was released.</span></div><button class="btn" type="button" data-wallet-retry>Try again</button>`;
+    else if (withdrawal.status === 'review') $('#wallet-content').innerHTML = `<div class="notice notice-warn">${icon('info')}<span><b>${amount}</b> to ${name} needs a staff check, because the bot could not confirm the payment. The amount stays reserved until they do. Contact staff on Discord if it takes long.</span></div>`;
+    else {
+      $('#wallet-content').innerHTML = `<h2>Sending ${amount}</h2><p class="muted">The bot is paying <b>${name}</b> in game. You can leave this page.</p><p class="waiting">${withdrawal.status === 'processing' ? 'Payment in progress' : 'Waiting for the bot'}</p>`;
+      walletPoll = page.interval(async () => {
+        const request = walletRequest;
+        try {
+          const current = (await api('/api/wallet/withdrawals/current')).withdrawal;
+          if (request !== walletRequest || !current || current.status === withdrawal.status) return;
+          showWithdrawal(current);
+          if (['completed', 'failed'].includes(current.status)) { loadHistory(); refreshAccount(); }
+        } catch { /* The next check retries. */ }
+      }, 4000);
     }
-  } catch { /* A later refresh will retry. */ }
-}
-function renderDepositInstructions(deposit) {
-  stopWalletTimers();
-  const command = `/pay ${deposit.recipient} ${deposit.amount}`;
-  $('#wallet-dialog-content').innerHTML = `<div class="wallet-instructions">
-    <div class="wallet-icon">➤</div>
-    <h3>Send Payment to Our Bot</h3>
-    <p>Go to DonutSMP and send this exact in-game payment:</p>
-    <button id="copy-wallet-command" class="payment-command"><code>${escapeHtml(command)}</code><span>⧉</span></button>
-    <p class="wallet-from">Depositing from <b>${escapeHtml(deposit.minecraft_username)}</b></p>
-    <div class="deposit-timer"><span>◷</span><b id="deposit-countdown">06:00</b></div>
-    <p class="timer-note">Keep this window open while the payment is confirmed. It will also continue checking in the background.</p>
-  </div>`;
-  $('#copy-wallet-command').onclick = async () => { try { await copyWalletText(command); toast('Payment command copied.'); } catch { toast('Could not copy the payment command.'); } };
-  const tick = () => {
-    const remaining = Math.max(0, new Date(deposit.expires_at).getTime() - Date.now());
-    const totalSeconds = Math.ceil(remaining / 1000);
-    $('#deposit-countdown').textContent = `${String(Math.floor(totalSeconds / 60)).padStart(2, '0')}:${String(totalSeconds % 60).padStart(2, '0')}`;
-    if (!remaining) refreshWalletDeposit(deposit);
-  };
-  tick();
-  walletTimer = setInterval(tick, 1000);
-  walletPoll = setInterval(() => refreshWalletDeposit(deposit), 5000);
-  refreshWalletDeposit(deposit);
-}
-async function openWallet() {
-  walletTab = 'deposit';
-  document.querySelectorAll('[data-wallet-tab]').forEach((button) => button.classList.toggle('active', button.dataset.walletTab === walletTab));
-  $('#wallet-dialog').showModal();
-  try {
-    const [response, bot] = await Promise.all([api('/api/wallet/deposits/current'), api('/api/bot/status')]);
-    walletBotOnline = bot.status === 'ONLINE';
-    if (response.deposit?.status === 'pending') renderDepositInstructions(response.deposit);
-    else renderDepositForm();
-  } catch (error) { walletBotOnline = false; renderDepositForm(error.message); }
-}
-$('#wallet-open').onclick = openWallet;
-document.querySelectorAll('[data-wallet-tab]').forEach((button) => button.onclick = () => {
-  walletTab = button.dataset.walletTab;
-  document.querySelectorAll('[data-wallet-tab]').forEach((item) => item.classList.toggle('active', item === button));
-  if (walletTab === 'deposit') renderDepositForm(); else renderWithdraw();
-});
-$('#wallet-dialog').addEventListener('close', stopWalletTimers);
-
-function closeHeaderPopovers() {
-  $('#profile-menu').hidden = true;
-  $('#notifications-menu').hidden = true;
-  $('#profile-menu-toggle').setAttribute('aria-expanded', 'false');
-}
-function showView(view) {
-  document.querySelectorAll('[data-view]').forEach((item) => item.classList.toggle('active', item.dataset.view === view));
-  document.querySelectorAll('.view').forEach((item) => item.classList.toggle('active', item.id === view));
-}
-$('#profile-menu-toggle').onclick = (event) => {
-  event.stopPropagation();
-  const menu = $('#profile-menu');
-  const showing = menu.hidden;
-  closeHeaderPopovers();
-  menu.hidden = !showing;
-  $('#profile-menu-toggle').setAttribute('aria-expanded', String(showing));
-};
-$('#notifications-toggle').onclick = (event) => {
-  event.stopPropagation();
-  const menu = $('#notifications-menu');
-  const showing = menu.hidden;
-  closeHeaderPopovers();
-  menu.hidden = !showing;
-};
-$('#profile-menu-close').onclick = () => closeHeaderPopovers();
-document.addEventListener('pointerdown', (event) => {
-  if (!event.target.closest('.profile-menu-wrap') && !event.target.closest('.notifications')) closeHeaderPopovers();
-});
-document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeHeaderPopovers(); });
-document.querySelectorAll('[data-menu-view]').forEach((button) => button.onclick = () => { showView(button.dataset.menuView); closeHeaderPopovers(); });
-document.querySelectorAll('[data-social]').forEach((button) => button.onclick = () => {
-  if (button.dataset.social === 'discord') {
-    window.open('https://discord.gg/donutwagers', '_blank', 'noopener,noreferrer');
-    closeHeaderPopovers();
-    return;
   }
-  const label = { discord: 'Discord community', youtube: 'YouTube', x: 'X', favorites: 'Favorites', teams: 'Teams' }[button.dataset.social] || 'This feature';
-  toast(`${label} is not configured yet.`);
-  closeHeaderPopovers();
-});
-
-function renderAnnouncements(announcements) {
-  const feed = $('#announcement-feed');
-  if (!announcements.length) { feed.hidden = true; feed.innerHTML = ''; return; }
-  feed.hidden = false;
-  feed.innerHTML = announcements.slice(0, 3).map((announcement, index) => `<article class="announcement-card ${index ? 'compact' : ''}"><span class="announcement-icon">!</span><div><small>OFFICIAL ANNOUNCEMENT · ${escapeHtml(new Date(announcement.created_at).toLocaleDateString())}</small><h2>${escapeHtml(announcement.title)}</h2><p>${escapeHtml(announcement.message)}</p>${announcement.discord_message_url ? `<a href="${escapeHtml(announcement.discord_message_url)}" target="_blank" rel="noopener">View on Discord →</a>` : ''}</div></article>`).join('');
-}
-function ensureAnnouncementAdmin() {
-  const grid = document.querySelector('#admin .admin-control-grid');
-  if (!grid || $('#announcement-form')) return;
-  grid.insertAdjacentHTML('beforeend', `<form id="announcement-form" class="admin-control-card announcement-admin-card"><small>COMMUNITY CONTROL</small><h2>Post an announcement</h2><label class="announcement-visibility-option"><span><b>Show announcements on site</b><small>Turn this off to hide every site announcement without deleting them.</small></span><input id="announcement-site-enabled" type="checkbox" checked><i></i></label><label class="label" for="announcement-title">TITLE</label><input id="announcement-title" class="amount" maxlength="100" placeholder="Tournament starting soon" required><label class="label" for="announcement-message">MESSAGE</label><textarea id="announcement-message" class="amount" maxlength="2000" placeholder="Write the announcement players will see..." required></textarea><label class="discord-publish-option"><input id="announcement-discord" type="checkbox" checked><span><b>Post through Discord bot</b><small>Also sends this to your configured announcements channel.</small></span></label><button type="submit" class="orange">Publish announcement</button></form>`);
-}
-function ensureSnipeAdmin() {
-  const grid = document.querySelector('#admin .admin-control-grid');
-  if (!grid || $('#snipe-adjust-form')) return;
-  grid.insertAdjacentHTML('beforeend', `<form id="snipe-adjust-form" class="admin-control-card"><small>SNIPE CONTROL</small><h2>Adjust player snipes</h2><label class="label" for="snipe-adjust-player">PLAYER</label><input id="snipe-adjust-player" class="amount" placeholder="Discord ID, username, or Minecraft name" required><label class="label" for="snipe-adjust-amount">AMOUNT · USE - TO REMOVE</label><input id="snipe-adjust-amount" class="amount" type="number" step="1" placeholder="Example: 5 or -2" required><label class="label" for="snipe-adjust-reason">REASON</label><input id="snipe-adjust-reason" class="amount" maxlength="160" placeholder="Owner snipe adjustment"><button type="submit" class="orange">Update snipes</button></form>`);
-}
-function ensureTournamentFields() {
-  const prize = $('#tournament-prize');
-  if (!prize || $('#tournament-format')) return;
-  const startImmediately = document.querySelector('[data-tournament-submit="start"]');
-  if (startImmediately) startImmediately.hidden = true;
-  const createButton = document.querySelector('[data-tournament-submit="save"]');
-  if (createButton) createButton.textContent = 'Create tournament';
-  prize.closest('form').querySelector('.admin-field-row').insertAdjacentHTML('afterend', `<div class="admin-field-row tournament-extra-fields"><label>FORMAT<select id="tournament-format"><option value="BRACKET">Bracket</option><option value="LEADERBOARD">Leaderboard</option></select></label><label>MAX PLAYERS<select id="tournament-max-players"><option>2</option><option>4</option><option>8</option><option selected>16</option><option>32</option><option>64</option></select></label></div><label class="label" for="tournament-duration">LEADERBOARD WINDOW (HOURS)</label><input id="tournament-duration" class="amount" type="number" min="1" max="168" value="24"><label class="label" for="tournament-rules">RULES</label><input id="tournament-rules" class="amount" maxlength="500" value="First to 5, win by two.">`);
-}
-function tournamentCard(tournament, admin = false) {
-  const status = String(tournament.status || 'OPEN');
-  const statusLabel = status === 'IN_PROGRESS' ? 'In progress' : status === 'COMPLETED' ? 'Completed' : status === 'DISABLED' ? 'Disabled' : 'Registration open';
-  const standings = (tournament.standings || []).slice(0, 5).map((row, index) => `<li><b>${index + 1}</b><span>${escapeHtml(row.username)}<small>${row.minecraft_username ? escapeHtml(row.minecraft_username) : 'Minecraft verified player'}</small></span><strong>${row.points} pts · ${row.wins}W</strong></li>`).join('');
-  const bracket = (tournament.matches || []).length ? `<div class="tournament-match-list"><small>MATCHES</small>${tournament.matches.map((match) => `<a href="${escapeHtml(match.match_url)}"><span>Round ${Number(match.tournament_round || 1)} · ${escapeHtml(match.creator)} vs ${escapeHtml(match.opponent || 'TBD')}</span><b>${escapeHtml(String(match.status).replaceAll('_',' '))} →</b></a>`).join('')}</div>` : '';
-  const register = status === 'OPEN' && !tournament.is_registered ? `<button data-register-tournament="${escapeHtml(tournament.id)}">Register free</button>` : status === 'OPEN' ? '<button disabled>✓ Registered</button>' : '';
-  const adminAction = admin ? `${status === 'OPEN' ? `<button data-start-tournament="${escapeHtml(tournament.id)}">Start tournament</button>` : status === 'IN_PROGRESS' && tournament.format === 'LEADERBOARD' ? `<button data-end-tournament="${escapeHtml(tournament.id)}">End & pay winner</button>` : ''}${['OPEN','DISABLED'].includes(status) ? `<button class="tournament-disable" data-toggle-tournament="${escapeHtml(tournament.id)}">${status === 'DISABLED' ? 'Enable tournament' : 'Disable tournament'}</button>` : ''}` : '';
-  return `<article class="tournament-card"><div class="tournament-card-accent"></div><header><span>♛</span><div><small>${escapeHtml(tournament.format || 'BRACKET')} · FREE ENTRY</small><h2>${escapeHtml(tournament.name)}</h2></div><b class="tournament-status ${status.toLowerCase()}">${statusLabel}</b></header><div class="tournament-specs"><span><small>REGION</small><b>◉ ${escapeHtml(tournament.region)}</b></span><span><small>MODE</small><b>${tournament.game_mode === 'Crystal PvP' ? '◆ CPvP' : '⚔ Sword'}</b></span><span><small>PLAYERS</small><b>${Number(tournament.registered_count || 0)} / ${Number(tournament.max_players || 16)}</b></span><span><small>WINNER PRIZE</small><b class="tournament-prize">${Number(tournament.winner_prize || 0).toLocaleString()}</b></span></div>${standings ? `<ol class="tournament-standings">${standings}</ol>` : ''}${bracket}<footer>${admin ? adminAction : register}</footer></article>`;
-}
-function renderTournaments(tournaments, admin = false) {
-  const destination = admin ? $('#admin-tournament-list') : $('#tournament-list');
-  if (!tournaments.length) { destination.innerHTML = '<div class="empty tournament-empty"><h2>No tournaments yet.</h2><p>The owner can publish the first official event from the Admin Panel.</p></div>'; return; }
-  destination.innerHTML = tournaments.map((tournament) => tournamentCard(tournament, admin)).join('');
-}
-async function loadTournaments(admin = false) {
-  try { renderTournaments((await api('/api/tournaments')).tournaments, admin); }
-  catch (error) { (admin ? $('#admin-tournament-list') : $('#tournament-list')).innerHTML = `<div class="empty"><h2>Unable to load tournaments.</h2><p>${escapeHtml(error.message)}</p></div>`; }
-}
-$('#tournament-admin-shortcut').onclick = () => { showView('admin'); loadAdmin(); setTimeout(() => $('#tournament-name').focus(), 0); };
-
-function renderAdminMatches(matches) {
-  const list = $('#admin-match-list');
-  if (currentUser?.is_helper) matches = matches.filter((match) => ['IN_PROGRESS', 'DISPUTED'].includes(match.status));
-  if (!matches.length) {
-    list.innerHTML = '<div class="empty">♛<h2>No matches to review.</h2><p>Open, disputed, and completed matches will appear here.</p></div>';
-    return;
+  async function loadHistory() {
+    const states = { pending: 'Waiting', processing: 'Sending', review: 'Staff check', expired: 'Expired', failed: 'Failed' };
+    try {
+      const { entries } = await api('/api/wallet/history');
+      $('#wallet-history').innerHTML = entries.length ? entries.map((entry) => {
+        const [label, iconName] = HISTORY_LABELS[entry.type] || [entry.type, 'info'];
+        const tag = entry.match_url ? 'a' : 'div';
+        const isVoid = ['expired', 'failed'].includes(entry.status);
+        return `<${tag} class="history-row ${isVoid ? 'is-void' : ''}"${entry.match_url ? ` href="${escapeHtml(entry.match_url)}"` : ''}>${icon(iconName)}<span>${escapeHtml(entry.label || label)}<small>${states[entry.status] ? `${states[entry.status]}, ` : ''}${timeAgo(entry.created_at)}</small></span><b class="num ${entry.amount > 0 && !isVoid ? 'plus' : ''}">${entry.amount > 0 ? '+' : '−'}${fullNumber(Math.abs(entry.amount))}</b></${tag}>`;
+      }).join('') : '<p class="popover-empty">Deposits, withdrawals, and match results will appear here.</p>';
+    } catch (error) { $('#wallet-history').innerHTML = `<p class="popover-empty">${escapeHtml(error.message)}</p>`; }
   }
-  list.innerHTML = matches.map((match) => {
-    const creator = match.creator_player;
-    const opponent = match.opponent_player;
-    const names = opponent ? `${escapeHtml(creator.username)} vs ${escapeHtml(opponent.username)}` : `${escapeHtml(creator?.username || 'Unknown')} · waiting for opponent`;
-    const status = escapeHtml(String(match.status || 'UNKNOWN').replaceAll('_', ' '));
-    const winner = match.winner ? `Winner: ${escapeHtml(match.winner)}` : 'No winner recorded';
-    const options = opponent ? `<option value="${escapeHtml(creator.id)}">${escapeHtml(creator.username)} wins</option><option value="${escapeHtml(opponent.id)}">${escapeHtml(opponent.username)} wins</option>` : '';
-    const action = match.status === 'COMPLETED' ? 'Overturn / Set winner' : 'Set winner';
-    return `<article class="admin-match" data-admin-match="${escapeHtml(match.match_code)}"><div><span class="admin-state">${status}</span><h2>${names}</h2><p>Match ${escapeHtml(match.match_code)} · ${Number(match.wager_amount || 0).toLocaleString()} per player · ${winner}</p><div class="admin-match-meta"><span>${escapeHtml(match.game_mode || 'Duel')}</span><span>${escapeHtml(match.rules || 'No rules recorded')}</span>${match.settled_at ? `<span>Settled ${escapeHtml(new Date(match.settled_at).toLocaleString())}</span>` : ''}<a href="${escapeHtml(match.match_url)}">Open room & chat →</a></div></div><div class="admin-match-actions">${opponent ? `<select aria-label="Select corrected winner">${options}</select><button data-admin-resolve> ${action}</button>` : '<span class="search-empty">A second player must join before this match can be resolved.</span>'}</div></article>`;
-  }).join('');
-}
-async function loadAdmin() {
-  if (!currentUser?.is_admin && !currentUser?.is_helper) return;
-  $('#admin-role-heading').textContent = currentUser.is_helper ? 'Helper Panel' : 'Admin Panel';
-  $('#admin-role-kicker').textContent = currentUser.is_helper ? 'HELPER TOOLS' : 'OWNER CONTROLS';
-  $('#admin-role-intro').textContent = currentUser.is_helper
-    ? 'Helpers can review match tickets and force a winner. Wallet, tournament, announcement, ban, and role controls remain unavailable.'
-    : 'Owner and Admin controls are permission-checked on the server and recorded in the audit log.';
-  if (!currentUser.is_admin) {
-    $('#admin-match-list').innerHTML = '<div class="empty"><h2>Loading match reviews…</h2></div>';
-    try { renderAdminMatches((await api('/api/admin/matches')).matches); }
-    catch (error) { $('#admin-match-list').innerHTML = `<div class="empty"><h2>Unable to load match reviews.</h2><p>${escapeHtml(error.message)}</p></div>`; }
-    return;
+  $$('[data-wallet-tab]').forEach((button) => button.addEventListener('click', () => { walletTab = button.dataset.walletTab; setPressed($$('[data-wallet-tab]'), button); openWallet(); }));
+
+  /* ---------- Settings ---------- */
+  async function disconnectMinecraft(button) {
+    if (!await confirmDialog({ title: 'Disconnect Minecraft?', body: 'You’ll need to verify again before you can play, deposit, or withdraw.', confirm: 'Disconnect', danger: true })) return;
+    withBusy(button, async () => { await post('/api/minecraft/disconnect'); toast('Minecraft disconnected.'); await refreshViewer(); });
   }
-  ensureAnnouncementAdmin();
-  ensureTournamentFields();
-  ensureSnipeAdmin();
-  const balanceForm = $('#balance-credit-form');
-  balanceForm.querySelector('h2').textContent = 'Adjust a balance';
-  balanceForm.querySelector('label[for="balance-credit-amount"]').textContent = 'CASH AMOUNT';
-  balanceForm.querySelector('#balance-credit-amount').placeholder = 'Example: 5m';
-  const balanceButton = balanceForm.querySelector('button[type="submit"]');
-  if (balanceButton && !balanceForm.querySelector('[data-balance-direction]')) balanceButton.outerHTML = '<div class="admin-form-actions balance-actions"><button type="submit" data-balance-direction="add" class="orange">＋ Add cash</button><button type="submit" data-balance-direction="remove" class="danger-action">− Remove cash</button></div>';
-  $('#admin-match-list').innerHTML = '<div class="empty"><h2>Loading admin matches…</h2></div>';
-  loadTournaments(true);
-  api('/api/announcements').then((result) => { if ($('#announcement-site-enabled')) $('#announcement-site-enabled').checked = result.enabled !== false; }).catch(() => undefined);
-  try { renderAdminMatches((await api('/api/admin/matches')).matches); }
-  catch (error) { $('#admin-match-list').innerHTML = `<div class="empty"><h2>Unable to load admin matches.</h2><p>${escapeHtml(error.message)}</p></div>`; }
-}
-$('#admin-refresh').onclick = loadAdmin;
-$('#admin').addEventListener('change', async (event) => {
-  if (event.target.id !== 'announcement-site-enabled') return;
-  const toggle = event.target;
-  toggle.disabled = true;
-  try {
-    const result = await api('/api/admin/announcements/visibility', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: toggle.checked }) });
-    toast(result.enabled ? 'Announcements are now visible.' : 'Announcements are now hidden from the site.');
-    renderAnnouncements((await api('/api/announcements')).announcements);
-  } catch (error) { toggle.checked = !toggle.checked; toast(error.message); }
-  finally { toggle.disabled = false; }
-});
-$('#admin').addEventListener('submit', async (event) => {
-  if (event.target.id !== 'announcement-form') return;
-  event.preventDefault();
-  const button = event.submitter;
-  button.disabled = true;
-  try {
-    const result = await api('/api/admin/announcements', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: $('#announcement-title').value, message: $('#announcement-message').value, publish_to_discord: $('#announcement-discord').checked }) });
-    toast(`Published “${result.announcement.title}”.`);
-    event.target.reset();
-    $('#announcement-discord').checked = true;
-    const announcements = await api('/api/announcements');
-    renderAnnouncements(announcements.announcements);
-  } catch (error) { toast(error.message); }
-  finally { button.disabled = false; }
-});
-$('#admin').addEventListener('submit', async (event) => {
-  if (event.target.id !== 'snipe-adjust-form') return;
-  event.preventDefault();
-  const form = event.target;
-  const button = event.submitter;
-  const amount = Number($('#snipe-adjust-amount').value);
-  if (!Number.isSafeInteger(amount) || amount === 0) return toast('Enter a positive or negative whole number of snipes.');
-  if (!window.confirm(`${amount < 0 ? 'Remove' : 'Add'} ${Math.abs(amount)} snipes ${amount < 0 ? 'from' : 'to'} this player?`)) return;
-  button.disabled = true;
-  try {
-    const result = await api('/api/admin/snipes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ player: $('#snipe-adjust-player').value, amount, reason: $('#snipe-adjust-reason').value }) });
-    toast(`${result.player.username} now has ${Number(result.player.snipes).toLocaleString()} snipes.`);
-    form.reset();
-    load();
-  } catch (error) { toast(error.message); }
-  finally { button.disabled = false; }
-});
-$('#tournament-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const submitter = event.submitter;
-  const prize = parseWalletAmount($('#tournament-prize').value);
-  if (!prize) return toast('Enter a valid winner prize, such as 10m.');
-  submitter.disabled = true;
-  try {
-    const result = await api('/api/admin/tournaments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: $('#tournament-name').value, region: $('#tournament-region').value, game_mode: $('#tournament-mode').value, winner_prize: prize, format: $('#tournament-format').value, max_players: Number($('#tournament-max-players').value), duration_hours: Number($('#tournament-duration').value), rules: $('#tournament-rules').value }) });
-    toast('Tournament created. Players can now register.');
-    form.reset();
+  $('#pref-background').checked = prefs.get('background') !== 'still';
+  $('#pref-background').addEventListener('change', (event) => { prefs.set('background', event.target.checked ? 'moving' : 'still'); applyBackground(); });
+  $('#start-break').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const select = $('#break-length');
+    if (!await confirmDialog({ title: 'Start a break?', body: `For ${select.selectedOptions[0].textContent.toLowerCase()} you can’t create or join matches or deposit. You can’t undo this.`, confirm: 'Start break' })) return;
+    withBusy(button, async () => { await post('/api/me/break', { days: Number(select.value) }); await refreshViewer(); toast('Your break has started.'); });
+  });
+  $('#delete-account').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const agreed = await confirmDialog({ title: 'Delete your account?', body: `This removes your name, Discord, Minecraft link, and messages. Match and payment records stay without your name. Any balance under 15M is lost${me.total_balance ? ` (you have ${fullNumber(me.total_balance)})` : ''}. This can’t be undone.`, typed: me.username, confirm: 'Delete account', danger: true });
+    if (!agreed) return;
+    withBusy(button, async () => { await post('/api/me/delete', { confirm: me.username }); location.href = '/'; });
+  });
+  $('#revoke-sessions').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    if (!await confirmDialog({ title: 'Log out other devices?', body: 'You stay logged in here.', confirm: 'Log out others' })) return;
+    withBusy(button, async () => { const { revoked } = await post('/api/me/sessions/revoke-others'); toast(revoked ? `Logged out ${revoked} other session${revoked === 1 ? '' : 's'}.` : 'You’re not logged in anywhere else.'); });
+  });
+
+  /* ---------- Tournaments ---------- */
+  function tournamentCard(item, forAdmin) {
+    const [label, tone] = { OPEN: ['Registration open', 'gold'], IN_PROGRESS: ['In progress', 'good'], COMPLETED: ['Completed', ''], DISABLED: ['Disabled', 'bad'] }[item.status] || [item.status, ''];
+    const registered = Number(item.registered_count || 0);
+    const max = Number(item.max_players || 16);
+    const started = ['IN_PROGRESS', 'COMPLETED'].includes(item.status);
+    const standings = started ? (item.standings || []).slice(0, 5).map((row, index) => `<li><b class="num">${index + 1}</b><strong>${escapeHtml(row.username)}</strong><span class="num muted">${row.points} pts, ${row.wins}–${row.losses}</span></li>`).join('') : '';
+    const bracket = (item.matches || []).map((match) => `<a href="${escapeHtml(matchHref(match))}"><span>Round ${Number(match.tournament_round || 1)}: ${escapeHtml(match.creator)} vs ${escapeHtml(match.opponent || 'TBD')}</span>${match.winner ? `<b>${escapeHtml(match.winner)}</b>` : statusTag(match)}</a>`).join('');
+    const id = escapeHtml(item.id);
+    let actions = '';
+    if (forAdmin) {
+      if (item.status === 'OPEN') actions += `<button class="btn btn-primary" type="button" data-tournament="start" data-id="${id}">Start</button>`;
+      if (item.status === 'IN_PROGRESS' && item.format === 'LEADERBOARD') actions += `<button class="btn btn-primary" type="button" data-tournament="end" data-id="${id}">End and pay winner</button>`;
+      if (['OPEN', 'DISABLED'].includes(item.status)) actions += `<button class="btn" type="button" data-tournament="toggle" data-id="${id}">${item.status === 'DISABLED' ? 'Enable' : 'Disable'}</button>`;
+    } else if (item.status === 'OPEN') {
+      if (item.is_registered) actions = `<span class="btn btn-good" aria-disabled="true">${icon('check')}You’re registered</span>`;
+      else if (registered >= max) actions = '<button class="btn" type="button" disabled>Full</button>';
+      else actions = `<button class="btn btn-primary" type="button" data-tournament="register" data-id="${id}">Register free</button>`;
+    }
+    const ends = item.format === 'LEADERBOARD' && item.status === 'IN_PROGRESS' && item.ends_at ? `, ${new Date(item.ends_at) > new Date() ? 'ends' : 'ended'} ${new Date(item.ends_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}` : '';
+    return `<article class="tournament panel"><header><div><h2>${escapeHtml(item.name)}</h2><p>${escapeHtml(item.game_mode === 'Crystal PvP' ? 'Crystal PvP' : 'Sword')}, ${escapeHtml(item.region)}, ${item.format === 'LEADERBOARD' ? 'leaderboard' : 'bracket'}${ends}</p></div><span class="tag ${tone ? `tag-${tone}` : ''}">${escapeHtml(label)}</span></header>
+      <div class="tournament-prize"><span>Winner prize</span><b class="display num">${shortAmount(item.winner_prize)}</b></div>
+      ${item.rules ? `<p class="muted">${escapeHtml(item.rules)}</p>` : ''}
+      <div class="fill"><div><span>${started ? 'Players' : 'Registered'}</span><b class="num">${registered} of ${max}</b></div><div class="bar"><i style="width:${Math.min(100, (registered / max) * 100)}%"></i></div></div>
+      ${standings ? `<ol class="standings">${standings}</ol>` : ''}${bracket ? `<div class="bracket"><h3>Matches</h3>${bracket}</div>` : ''}<footer>${actions}</footer></article>`;
+  }
+  async function loadTournaments(forAdmin = false) {
+    const box = forAdmin ? $('#admin-tournament-list') : $('#tournament-list');
+    try {
+      const { tournaments } = await api('/api/tournaments');
+      box.innerHTML = tournaments.length ? tournaments.map((item) => tournamentCard(item, forAdmin)).join('') : emptyState('trophy', 'No tournaments yet', forAdmin ? 'Create one to open registration.' : 'Official events will be listed here as soon as one is announced.');
+    } catch (error) { box.innerHTML = emptyState('alert', 'Tournaments didn’t load', error.message); }
+  }
+  async function tournamentAction(button) {
+    const { tournament: action, id } = button.dataset;
+    const path = `/api/${action === 'register' ? '' : 'admin/'}tournaments/${encodeURIComponent(id)}/${action}`;
+    if (action === 'register' && !await ensureAllowed()) return;
+    if (action === 'register' && !me.minecraft_verified) { openVerify(); return; }
+    const prompts = { start: { title: 'Start this tournament?', body: 'Registration closes and no more players can enter.', confirm: 'Start' }, end: { title: 'End this leaderboard?', body: 'The player in first place is paid the prize. This can’t be undone.', confirm: 'End and pay winner' } };
+    if (prompts[action] && !await confirmDialog(prompts[action])) return;
+    withBusy(button, async () => {
+      await post(path);
+      toast({ register: 'You’re registered.', start: 'Tournament started.', end: 'Tournament ended and the winner was paid.', toggle: 'Tournament updated.' }[action]);
+      await loadTournaments(action !== 'register');
+    });
+  }
+
+  /* ---------- Admin ---------- */
+  let adminMatches = [];
+  let reviewFilter = 'attention';
+  let adminPlayers = new Map();
+  let selectedPlayer = null;
+  async function loadAdmin() {
+    if (!me?.is_owner || !$('#admin')) return;
+    $('#admin-intro').textContent = 'Only you can see this panel. Every action is checked on the server and logged.';
+    loadSwitches();
+    if (!adminMatches.length) $('#admin-match-list').innerHTML = skeletons(1);
+    try { adminMatches = (await api('/api/admin/matches?limit=100')).matches; renderReviews(); }
+    catch (error) { $('#admin-match-list').innerHTML = emptyState('alert', 'Match reviews didn’t load', error.message); }
+    if (!me.is_admin) return;
+    loadPayments();
+    loadSecurity();
+    loadAudit();
+    loadHealth();
     loadTournaments(true);
-  } catch (error) { toast(error.message); }
-  finally { submitter.disabled = false; }
-});
-$('#admin-tournament-list').addEventListener('click', async (event) => {
-  const toggleButton = event.target.closest('[data-toggle-tournament]');
-  if (toggleButton) {
-    toggleButton.disabled = true;
-    try { const result = await api(`/api/admin/tournaments/${encodeURIComponent(toggleButton.dataset.toggleTournament)}/toggle`, { method: 'POST' }); toast(`Tournament ${result.tournament.status === 'DISABLED' ? 'disabled' : 'enabled'}.`); loadTournaments(true); }
-    catch (error) { toggleButton.disabled = false; toast(error.message); }
-    return;
+    api('/api/announcements').then((result) => { $('#announcement-visible').checked = result.enabled !== false; }).catch(() => undefined);
   }
-  const endButton = event.target.closest('[data-end-tournament]');
-  if (endButton) {
-    if (!window.confirm('End this leaderboard and pay the current first-place player?')) return;
-    endButton.disabled = true;
-    try { await api(`/api/admin/tournaments/${encodeURIComponent(endButton.dataset.endTournament)}/end`, { method: 'POST' }); toast('Leaderboard completed and winner paid.'); loadTournaments(true); load(); } catch (error) { endButton.disabled = false; toast(error.message); }
-    return;
+  async function loadPayments() {
+    const box = $('#admin-payments');
+    try {
+      const { withdrawals, unmatched } = await api('/api/admin/payments');
+      $('#payments-count').textContent = withdrawals.length + unmatched.length || '';
+      box.innerHTML = withdrawals.length + unmatched.length === 0 ? emptyState('check', 'No payments need a check', 'Unconfirmed payouts and payments that matched no deposit appear here.')
+        : withdrawals.map((item) => `<article class="admin-row panel" data-withdrawal="${escapeHtml(item.id)}"><div><h3>Payout to ${escapeHtml(item.minecraft_username)} <span class="tag tag-gold">Unconfirmed</span></h3><p>${fullNumber(item.amount)} for ${escapeHtml(item.username || 'unknown')}, ${timeAgo(item.created_at)}. Check the bot’s payment history in game before choosing.</p></div><div class="admin-actions"><button class="btn btn-small" type="button" data-settle="no">Was not sent</button><button class="btn btn-small btn-primary" type="button" data-settle="yes">Was sent</button></div></article>`).join('')
+        + unmatched.map((item) => `<article class="admin-row panel" data-unmatched="${escapeHtml(item.id)}"><div><h3>Payment from ${escapeHtml(item.minecraft_username)} <span class="tag">No deposit</span></h3><p>${fullNumber(item.amount)}, ${timeAgo(item.created_at)}. ${item.username ? `Verified account: ${escapeHtml(item.username)}.` : 'No verified account uses this name.'}</p></div><div class="admin-actions"><button class="btn btn-small" type="button" data-unmatched-action="dismiss">Dismiss</button>${item.username ? '<button class="btn btn-small btn-primary" type="button" data-unmatched-action="credit">Credit</button>' : ''}</div></article>`).join('');
+    } catch (error) { box.innerHTML = emptyState('alert', 'Payments didn’t load', error.message); }
   }
-  const button = event.target.closest('[data-start-tournament]');
-  if (!button) return;
-  if (!window.confirm('Start this tournament now?')) return;
-  button.disabled = true;
-  try { await api(`/api/admin/tournaments/${encodeURIComponent(button.dataset.startTournament)}/start`, { method: 'POST' }); toast('Tournament started.'); loadTournaments(true); }
-  catch (error) { button.disabled = false; toast(error.message); }
-});
-$('#tournament-list').addEventListener('click', async (event) => {
-  const button = event.target.closest('[data-register-tournament]');
-  if (!button) return;
-  button.disabled = true;
-  try { await api(`/api/tournaments/${encodeURIComponent(button.dataset.registerTournament)}/register`, { method: 'POST' }); toast('Tournament registration confirmed.'); loadTournaments(); }
-  catch (error) { button.disabled = false; toast(error.message); }
-});
-$('#balance-credit-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const button = event.submitter;
-  const parsedAmount = parseWalletAmount($('#balance-credit-amount').value);
-  if (!parsedAmount) return toast('Enter a valid cash amount, such as 1m.');
-  const removing = button?.dataset.balanceDirection === 'remove';
-  const amount = Math.abs(parsedAmount) * (removing ? -1 : 1);
-  if (!window.confirm(`${removing ? 'Remove' : 'Add'} ${Math.abs(amount).toLocaleString()} ${removing ? 'from' : 'to'} this player's cash balance?`)) return;
-  button.disabled = true;
-  try {
-    const result = await api('/api/admin/balance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ player: $('#balance-credit-player').value, amount, reason: $('#balance-credit-reason').value }) });
-    toast(`Balance updated for ${result.player.username}. New balance: ${Number(result.player.balance).toLocaleString()}.`);
-    form.reset();
-    load();
-  } catch (error) { toast(error.message); }
-  finally { button.disabled = false; }
-});
-$('#admin-match-list').addEventListener('click', async (event) => {
-  const button = event.target.closest('[data-admin-resolve]');
-  if (!button) return;
-  const card = button.closest('[data-admin-match]');
-  const winner = card.querySelector('select').value;
-  if (!window.confirm('Set this selected player as the official winner? This will update balances and player records.')) return;
-  button.disabled = true;
-  try {
-    const result = await api(`/api/admin/matches/${encodeURIComponent(card.dataset.adminMatch)}/resolve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ winner_id: winner }) });
-    toast(result.changed ? 'Official result updated.' : 'That winner is already recorded.');
-    loadAdmin();
-    load();
-  } catch (error) {
-    button.disabled = false;
-    toast(error.message);
+  async function settlePayout(button) {
+    const sent = button.dataset.settle === 'yes';
+    const id = button.closest('[data-withdrawal]').dataset.withdrawal;
+    if (!await confirmDialog({ title: sent ? 'Mark as sent?' : 'Release the balance?', body: sent ? 'The amount leaves the player’s balance for good.' : 'The player can use or withdraw the amount again. Only do this if it was not paid in game.', confirm: sent ? 'It was sent' : 'It was not sent', danger: !sent })) return;
+    withBusy(button, async () => { await post(`/api/admin/withdrawals/${encodeURIComponent(id)}/settle`, { paid: sent }); toast('Payout settled.'); await loadPayments(); });
   }
-});
+  async function resolveUnmatched(button) {
+    const credit = button.dataset.unmatchedAction === 'credit';
+    const id = button.closest('[data-unmatched]').dataset.unmatched;
+    if (!await confirmDialog({ title: credit ? 'Credit this payment?' : 'Dismiss this payment?', body: credit ? 'The amount is added to the verified player’s balance.' : 'Nothing is credited. The record stays in the audit log.', confirm: credit ? 'Credit' : 'Dismiss', danger: !credit })) return;
+    withBusy(button, async () => { await post(`/api/admin/unmatched/${encodeURIComponent(id)}/resolve`, { credit }); toast(credit ? 'Payment credited.' : 'Payment dismissed.'); await loadPayments(); });
+  }
+  async function loadSecurity() {
+    const box = $('#admin-security');
+    try {
+      const { events, suspicious, sync_failures: failures } = await api('/api/admin/security');
+      const open = events.filter((item) => item.status === 'open');
+      $('#security-count').textContent = open.length || '';
+      const who = (player) => (player ? ` ${escapeHtml(player.username)}` : '');
+      const eventRow = (item) => `<article class="admin-row panel"><div><h3>${escapeHtml(item.label)}${item.status === 'open' ? '<span class="tag tag-gold">New</span>' : ''}</h3><p>${item.player ? `${escapeHtml(item.player.username)}, Discord ID ${escapeHtml(item.player.discord_id)}. ` : 'No account. '}${fullNumber(item.count)} time${item.count === 1 ? '' : 's'}, last ${timeAgo(item.last_at)}.</p></div><div class="admin-actions">${item.status === 'open' ? `<button class="btn btn-small" type="button" data-review-event="${escapeHtml(item.id)}">Mark reviewed</button>` : ''}</div></article>`;
+      box.innerHTML = `<h2 class="admin-subhead">Security events</h2>${events.length ? [...open, ...events.filter((item) => item.status !== 'open')].slice(0, 40).map(eventRow).join('') : emptyState('shield', 'No security events', 'Blocked and unusual requests from the last 30 days appear here.')}
+        <h2 class="admin-subhead">Worth a look</h2>${suspicious.length ? suspicious.map((item) => `<article class="admin-row panel"><div><h3>${escapeHtml(item.title)}</h3><p>${item.amount ? `${fullNumber(item.amount)} in entries. ` : ''}This is a pattern, not proof. Check the matches before acting.</p></div></article>`).join('') : '<p class="muted">No unusual match patterns this week.</p>'}
+        <h2 class="admin-subhead">Failed tier checks</h2>${failures.length ? failures.map((item) => `<article class="admin-row panel"><div><h3>${who(item)}</h3><p>${escapeHtml(item.minecraft_username)}: ${escapeHtml(item.error)} Failed ${fullNumber(item.failures)} time${item.failures === 1 ? '' : 's'}, next try ${escapeHtml(tierDate(item.next_attempt_at))}.</p></div></article>`).join('') : '<p class="muted">No failed tier checks.</p>'}`;
+    } catch (error) { box.innerHTML = emptyState('alert', 'Security events didn’t load', error.message); }
+  }
+  async function reviewEvent(button) {
+    await withBusy(button, async () => { await post(`/api/admin/security/${encodeURIComponent(button.dataset.reviewEvent)}/review`); await loadSecurity(); });
+  }
+  let auditRows = [];
+  let auditPlayer = '';
+  async function loadAudit(more = false) {
+    const box = $('#admin-audit');
+    if (!more) auditRows = [];
+    try {
+      const before = more && auditRows.length ? `&before=${encodeURIComponent(auditRows.at(-1).created_at)}` : '';
+      const { entries, more: hasMore } = await api(`/api/admin/audit?player=${encodeURIComponent(auditPlayer)}${before}`);
+      auditRows = [...auditRows, ...entries];
+      const details = (value) => Object.entries(value || {}).filter(([, item]) => item !== null && typeof item !== 'object').map(([key, item]) => `${key.replaceAll('_', ' ')}: ${item}`).join(', ');
+      box.innerHTML = auditRows.length ? `<div class="table-wrap" tabindex="0" role="region" aria-label="History"><table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Details</th></tr></thead><tbody>${auditRows.map((entry) => `<tr><td>${escapeHtml(tierDate(entry.created_at))}</td><td>${escapeHtml(entry.actor)}${entry.target && entry.target !== entry.actor ? ` <span class="muted">on ${escapeHtml(entry.target)}</span>` : ''}</td><td>${escapeHtml(entry.action.replaceAll('_', ' '))}</td><td class="audit-details">${escapeHtml(details(entry.details))}</td></tr>`).join('')}</tbody></table></div>${hasMore ? '<button class="btn btn-small" type="button" data-audit-more>Show older</button>' : ''}` : emptyState('history', 'No history yet', 'Account, match, and payment actions are listed here.');
+    } catch (error) { box.innerHTML = `<div class="notice notice-bad">${icon('alert')}<span>${escapeHtml(error.message)}</span></div>`; }
+  }
+  $('#audit-form')?.addEventListener('submit', (event) => { event.preventDefault(); auditPlayer = event.target.elements.player.value.trim(); loadAudit(); });
+  async function loadSwitches() {
+    const box = $('#admin-switches');
+    try {
+      const { switches } = await api('/api/admin/features');
+      box.innerHTML = switches.map((item) => `<label class="connection switch-row"><div><b>${escapeHtml(item.label)}</b><small>${escapeHtml(item.description)}</small></div><span class="tag ${item.enabled ? 'tag-good' : 'tag-bad'}">${item.enabled ? 'On' : 'Off'}</span><input class="switch" type="checkbox" role="switch" data-switch="${escapeHtml(item.key)}" ${item.enabled ? 'checked' : ''} aria-label="${escapeHtml(item.label)}"></label>`).join('');
+    } catch (error) { box.innerHTML = `<div class="notice notice-bad">${icon('alert')}<span>${escapeHtml(error.message)}</span></div>`; }
+  }
+  async function flipSwitch(input) {
+    const label = input.getAttribute('aria-label');
+    const enabled = input.checked;
+    input.disabled = true;
+    try {
+      await post('/api/admin/features', { key: input.dataset.switch, enabled });
+      toast(`${label} is ${enabled ? 'on' : 'off'}.`);
+      await Promise.all([loadSwitches(), refreshViewer()]);
+    } catch (error) { input.checked = !enabled; toast(error.message, true); input.disabled = false; }
+  }
+  function tierHealth(tiers) {
+    const counts = tiers.players;
+    return [['PvP tiers', tiers.enabled ? (tiers.paused_until ? `Paused until ${tierDate(tiers.paused_until)}` : 'Connected') : 'Off'], ...(tiers.enabled ? [['Tiers refreshed every', `${tiers.refresh_hours} h`], ['Last tier sync', tiers.last_success_at ? tierDate(tiers.last_success_at) : 'Not since start']] : [['Why tiers are off', tiers.reason]]), ...(tiers.last_error ? [['Last tier error', tiers.last_error]] : []), ['Ranked, unranked, waiting, unavailable', `${counts.ranked}, ${counts.unranked}, ${counts.pending}, ${counts.unavailable + counts.no_account_id}`], ['Showing older tiers', fullNumber(counts.stale)]];
+  }
+  async function refreshTiers(button) {
+    await withBusy(button, async () => { await post('/api/me/tiers/refresh'); toast('Checking your rankings. This can take a minute.'); await refreshViewer(); setTimeout(() => refreshViewer().catch(() => undefined), 5000); });
+  }
+  async function loadHealth() {
+    const box = $('#admin-health');
+    try {
+      const health = await api('/api/admin/metrics');
+      const problems = health.integrity_problems;
+      const on = (value) => (value ? 'On' : 'Off');
+      box.innerHTML = `<dl class="summary-list">${[['Bot', { ONLINE: 'Online', OFFLINE: 'Offline', OUTDATED: 'Outdated, payments blocked', NOT_CONFIGURED: 'Not configured' }[health.bot.status]], ['Wagers', on(health.features.wagers)], ['Deposits', on(health.features.deposits)], ['Withdrawals', on(health.features.withdrawals)], ['Server errors since start', fullNumber(health.counters.server_errors)], ['Slow requests (95th percentile)', health.latency_ms.p95 === null ? '–' : `${health.latency_ms.p95} ms`], ['Data problems', fullNumber(problems.length)], ...tierHealth(health.tiers)].map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>${problems.length ? `<div class="notice notice-bad">${icon('alert')}<ul>${problems.slice(0, 20).map((text) => `<li>${escapeHtml(text)}</li>`).join('')}</ul></div>` : ''}`;
+    } catch (error) { box.innerHTML = `<div class="notice notice-bad">${icon('alert')}<span>${escapeHtml(error.message)}</span></div>`; }
+  }
+  function renderReviews() {
+    const order = { DISPUTED: 0, IN_PROGRESS: 1, READY_UP: 2 };
+    let rows = adminMatches;
+    if (reviewFilter === 'attention') rows = rows.filter((match) => match.status in order).sort((a, b) => order[a.status] - order[b.status]);
+    if (reviewFilter === 'settled') rows = rows.filter((match) => match.status === 'COMPLETED');
+    $('#admin-match-list').innerHTML = rows.length ? rows.map((match) => {
+      const creator = match.creator_player;
+      const opponent = match.opponent_player;
+      const canResolve = creator && opponent && (['IN_PROGRESS', 'DISPUTED'].includes(match.status) || (me.is_owner && ['READY_UP', 'COMPLETED'].includes(match.status) && !(match.tournament_id && match.status === 'COMPLETED')));
+      const option = (player) => `<option value="${escapeHtml(player.id)}" ${match.winner_id === player.id ? 'selected' : ''}>${escapeHtml(player.username)}</option>`;
+      return `<article class="admin-row panel" data-code="${escapeHtml(match.match_code)}"><div><h3 class="admin-title-row">${tierBadge(match.creator_tier)}<span>${escapeHtml(creator?.username || 'Unknown')}</span><span>vs</span>${tierBadge(match.opponent_tier)}<span>${escapeHtml(opponent?.username || 'nobody yet')}</span> ${statusTag(match)}</h3><p>${escapeHtml(modeName(match))} ${matchRegion(match)}, ${escapeHtml(matchTerms(match).label)}, ${match.tournament_id ? escapeHtml(match.tournament_name || 'tournament') : `${fullNumber(match.wager_amount)} each`}${match.winner ? `. Winner: ${escapeHtml(match.winner)}` : ''}. ${timeAgo(match.settled_at || match.created_at)}.</p></div><div class="admin-actions"><a class="btn btn-small" href="${escapeHtml(matchHref(match))}">Open room</a>${canResolve ? `<select class="input" aria-label="Winner">${option(creator)}${option(opponent)}</select><button class="btn btn-small btn-primary" type="button" data-resolve>${match.status === 'COMPLETED' ? 'Overturn' : 'Set winner'}</button>` : ''}</div></article>`;
+    }).join('') : emptyState('check', reviewFilter === 'attention' ? 'Nothing needs attention' : 'No matches here', reviewFilter === 'attention' ? 'Disputes and active matches will appear here.' : 'Matches will appear as they are played.');
+  }
+  async function resolveMatch(button) {
+    const row = button.closest('[data-code]');
+    const select = $('select', row);
+    const match = adminMatches.find((item) => item.match_code === row.dataset.code);
+    const name = select.selectedOptions[0].textContent;
+    if (match.status === 'COMPLETED' && match.winner_id === select.value) { toast(`${name} is already the recorded winner.`); return; }
+    if (!await confirmDialog({ title: `Make ${name} the winner?`, body: 'Balances and records are updated right away.', rows: match.tournament_id ? [] : [['Winner receives', fullNumber(winnerPayout(match.wager_amount)), true]], confirm: 'Set winner' })) return;
+    withBusy(button, async () => { await post(`/api/admin/matches/${encodeURIComponent(row.dataset.code)}/resolve`, { winner_id: select.value }); toast('Result updated.'); await Promise.all([loadAdmin(), refreshAll()]); });
+  }
+  page.on(document, 'change', (event) => { if (event.target.matches('[data-switch]')) flipSwitch(event.target); });
+  $$('[data-admin-tab]').forEach((button) => button.addEventListener('click', () => {
+    setPressed($$('[data-admin-tab]'), button);
+    $$('[data-admin-pane]').forEach((pane) => { pane.hidden = pane.dataset.adminPane !== button.dataset.adminTab; });
+  }));
+  $$('[data-review]').forEach((button) => button.addEventListener('click', () => { reviewFilter = button.dataset.review; setPressed($$('[data-review]'), button); renderReviews(); }));
+  $('#admin-refresh')?.addEventListener('click', (event) => withBusy(event.currentTarget, loadAdmin));
 
-let adminPlayerSearchTimer = null;
-let adminPlayers = new Map();
-let selectedBanPlayer = null;
-let selectedTagPlayer = null;
-function renderAdminPlayers(players, query) {
-  const destination = $('#admin-player-results');
-  adminPlayers = new Map(players.map((player) => [player.discord_id, player]));
-  if (!query || query.length < 2) { destination.innerHTML = ''; return; }
-  if (!players.length) { destination.innerHTML = '<div class="search-empty">No matching player.</div>'; return; }
-  destination.innerHTML = players.map((player) => {
-    const identity = player.minecraft_username ? `Minecraft: ${escapeHtml(player.minecraft_username)}` : `Discord ID: ${escapeHtml(player.discord_id)}`;
-    if (player.is_owner) return `<article class="admin-player"><span><b>${escapeHtml(player.username)}</b>${renderPlayerTags(player.tags, 'admin-tags')}<small>${identity} · Owner account</small></span><button disabled>Protected</button></article>`;
-    const banned = Boolean(player.ban);
-    return `<article class="admin-player"><span><b>${escapeHtml(player.username)}</b>${renderPlayerTags(player.tags, 'admin-tags')}<small>${identity}${banned ? ` · Banned: ${escapeHtml(player.ban.reason)}` : ''}</small></span><div class="admin-player-actions"><button class="tag-edit" data-admin-player-action="tags" data-admin-player="${escapeHtml(player.discord_id)}">Tags</button><button class="${banned ? 'unban' : ''}" data-admin-player-action="${banned ? 'unban' : 'ban'}" data-admin-player="${escapeHtml(player.discord_id)}">${banned ? 'Unban' : 'Ban'}</button></div></article>`;
-  }).join('');
-}
-async function searchAdminPlayers() {
-  const query = $('#admin-player-search-input').value.trim();
-  if (query.length < 2) return renderAdminPlayers([], query);
-  try { renderAdminPlayers((await api(`/api/admin/players?q=${encodeURIComponent(query)}`)).players, query); }
-  catch (error) { $('#admin-player-results').innerHTML = `<div class="search-empty">${escapeHtml(error.message)}</div>`; }
-}
-$('#admin-player-search-input').addEventListener('input', () => {
-  clearTimeout(adminPlayerSearchTimer);
-  adminPlayerSearchTimer = setTimeout(searchAdminPlayers, 220);
-});
-$('#admin-player-results').addEventListener('click', async (event) => {
-  const button = event.target.closest('[data-admin-player-action]');
-  if (!button) return;
-  const player = adminPlayers.get(button.dataset.adminPlayer);
-  if (!player) return;
-  if (button.dataset.adminPlayerAction === 'tags') {
-    selectedTagPlayer = player;
-    $('#tags-dialog-title').textContent = `Tags for ${player.username}`;
-    $('#tags-dialog-player').textContent = player.minecraft_username ? `Discord ID ${player.discord_id} · Minecraft ${player.minecraft_username}` : `Discord ID ${player.discord_id}`;
-    $('#player-tags-input').value = Array.isArray(player.tags) ? player.tags.join(', ') : '';
-    $('#tags-dialog').showModal();
-    return;
+  let adminSearchTimer = null;
+  let adminSearchRequest = 0;
+  async function searchAdminPlayers() {
+    const query = $('#admin-player-search').value.trim();
+    const box = $('#admin-player-results');
+    const request = ++adminSearchRequest;
+    if (query.length < 2) { box.innerHTML = ''; return; }
+    try {
+      const { players } = await api(`/api/admin/players?q=${encodeURIComponent(query)}`);
+      if (request !== adminSearchRequest) return;
+      adminPlayers = new Map(players.map((player) => [player.discord_id, player]));
+      box.innerHTML = players.length ? players.map((player) => {
+        const id = escapeHtml(player.discord_id);
+        const ban = player.ban;
+        const refresh = player.minecraft_uuid ? `<button class="btn btn-small" type="button" data-admin-player="tiers" data-id="${id}">Refresh tiers</button>` : '';
+        const signOut = player.is_owner ? '' : `<button class="btn btn-small" type="button" data-admin-player="signout" data-id="${id}">Sign out</button>`;
+        const actions = refresh + signOut + (player.is_owner ? '<span class="tag">Protected</span>' : `<button class="btn btn-small" type="button" data-admin-player="tags" data-id="${id}">Tags</button>${ban ? `<button class="btn btn-small btn-good" type="button" data-admin-player="unban" data-id="${id}">Unban</button>` : player.is_admin ? '' : `<button class="btn btn-small btn-danger" type="button" data-admin-player="ban" data-id="${id}">Ban</button>`}`);
+        return `<article class="admin-row panel"><div><h3 class="admin-title-row"><span>${escapeHtml(player.username)}</span>${siteTierBadges(player.tiers)}${playerTags(player.tags)}${ban ? '<span class="tag tag-bad">Banned</span>' : ''}</h3><p>${player.minecraft_username ? `${escapeHtml(player.minecraft_username)}, ` : ''}Discord ID ${id}${ban ? `. Reason: ${escapeHtml(ban.reason)}${ban.expires_at ? `, until ${escapeHtml(new Date(ban.expires_at).toLocaleString())}` : ', permanent'}` : ''}</p>${player.minecraft_uuid ? `<p class="muted admin-uuid">Minecraft ID ${escapeHtml(player.minecraft_uuid)}. ${escapeHtml(tierSummary(player.tiers))}${player.tiers_error ? ` Last error: ${escapeHtml(player.tiers_error)}` : ''}</p>` : ''}</div><div class="admin-actions">${actions}</div></article>`;
+      }).join('') : emptyState('search', 'No matching player', 'Try a Discord ID or a Minecraft name.');
+    } catch (error) { if (request === adminSearchRequest) box.innerHTML = emptyState('alert', 'Search failed', error.message); }
   }
-  if (button.dataset.adminPlayerAction === 'ban') {
-    selectedBanPlayer = player;
-    $('#ban-dialog-title').textContent = `Ban ${player.username}`;
-    $('#ban-dialog-player').textContent = player.minecraft_username ? `Discord ID ${player.discord_id} · Minecraft ${player.minecraft_username}` : `Discord ID ${player.discord_id}`;
-    $('#ban-reason').value = '';
-    $('#ban-duration').value = '';
-    $('#ban-dialog').showModal();
-    return;
+  $('#admin-player-search')?.addEventListener('input', () => { clearTimeout(adminSearchTimer); adminSearchTimer = setTimeout(searchAdminPlayers, 220); });
+  async function adminPlayerAction(button) {
+    const player = adminPlayers.get(button.dataset.id);
+    if (!player) return;
+    selectedPlayer = player;
+    if (button.dataset.adminPlayer === 'tiers') {
+      await withBusy(button, async () => { await post(`/api/admin/players/${encodeURIComponent(player.discord_id)}/tiers/refresh`); toast('Ranking refresh queued.'); });
+    } else if (button.dataset.adminPlayer === 'signout') {
+      if (!await confirmDialog({ title: `Sign out ${player.username}?`, body: 'Every device is signed out. They can sign in again.', confirm: 'Sign out', danger: true })) return;
+      await withBusy(button, async () => { const { revoked } = await post(`/api/admin/players/${encodeURIComponent(player.discord_id)}/sessions/revoke`); toast(`${revoked} session${revoked === 1 ? '' : 's'} ended.`); });
+    } else if (button.dataset.adminPlayer === 'tags') {
+      $('#tags-title').textContent = `Tags for ${player.username}`;
+      $('#tags-form').elements.tags.value = (player.tags || []).join(', ');
+      $('#tags-dialog').showModal();
+    } else if (button.dataset.adminPlayer === 'ban') {
+      $('#ban-form').reset();
+      $('#ban-title').textContent = `Ban ${player.username}`;
+      $('#ban-dialog').showModal();
+    } else if (await confirmDialog({ title: `Unban ${player.username}?`, body: 'They can log in and play again immediately.', confirm: 'Unban' })) {
+      withBusy(button, async () => { await post(`/api/admin/players/${encodeURIComponent(player.discord_id)}/unban`); toast(`${player.username} was unbanned.`); await searchAdminPlayers(); });
+    }
   }
-  if (!window.confirm(`Remove the ban for ${player.username}?`)) return;
-  button.disabled = true;
-  try {
-    await api(`/api/admin/players/${encodeURIComponent(player.discord_id)}/unban`, { method: 'POST' });
-    toast(`${player.username} has been unbanned.`);
-    searchAdminPlayers();
-  } catch (error) { button.disabled = false; toast(error.message); }
-});
-$('#confirm-ban').onclick = async () => {
-  if (!selectedBanPlayer) return;
-  const button = $('#confirm-ban');
-  const reason = $('#ban-reason').value.trim();
-  const duration = $('#ban-duration').value.trim();
-  if (!reason) return toast('Enter a reason for this ban.');
-  button.disabled = true;
-  try {
-    await api(`/api/admin/players/${encodeURIComponent(selectedBanPlayer.discord_id)}/ban`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason, duration_hours: duration || null }) });
-    $('#ban-dialog').close();
-    toast(`${selectedBanPlayer.username} has been banned.`);
-    selectedBanPlayer = null;
-    searchAdminPlayers();
-  } catch (error) { toast(error.message); }
-  finally { button.disabled = false; }
-};
-$('#ban-dialog').addEventListener('close', () => { selectedBanPlayer = null; });
-$('#save-player-tags').onclick = async () => {
-  if (!selectedTagPlayer) return;
-  const button = $('#save-player-tags');
-  const tags = $('#player-tags-input').value.split(',').map((tag) => tag.trim()).filter(Boolean);
-  button.disabled = true;
-  try {
-    await api(`/api/admin/players/${encodeURIComponent(selectedTagPlayer.discord_id)}/tags`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tags }) });
-    $('#tags-dialog').close();
-    toast(`Updated tags for ${selectedTagPlayer.username}.`);
-    searchAdminPlayers();
-  } catch (error) { toast(error.message); }
-  finally { button.disabled = false; }
-};
-$('#tags-dialog').addEventListener('close', () => { selectedTagPlayer = null; });
+  $('#ban-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const form = event.target;
+    withBusy(event.submitter, async () => {
+      await post(`/api/admin/players/${encodeURIComponent(selectedPlayer.discord_id)}/ban`, { reason: form.elements.reason.value.trim(), duration_hours: form.elements.duration.value || null });
+      $('#ban-dialog').close();
+      toast(`${selectedPlayer.username} was banned.`);
+      await searchAdminPlayers();
+    });
+  });
+  $('#tags-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    withBusy(event.submitter, async () => {
+      const tags = event.target.elements.tags.value.split(',').map((tag) => tag.trim()).filter(Boolean);
+      await post(`/api/admin/players/${encodeURIComponent(selectedPlayer.discord_id)}/tags`, { tags });
+      $('#tags-dialog').close();
+      toast(`Tags saved for ${selectedPlayer.username}.`);
+      await searchAdminPlayers();
+    });
+  });
+  async function adjust(event, { url, noun, parse, describe }) {
+    event.preventDefault();
+    const form = event.target;
+    const button = event.submitter;
+    const removing = button.value === 'remove';
+    const amount = parse(form.elements.amount.value);
+    if (!amount || amount < 1) { toast(`Enter a valid amount of ${noun}.`, true); return; }
+    const player = form.elements.player.value.trim();
+    if (!await confirmDialog({ title: removing ? `Remove ${noun}?` : `Add ${noun}?`, rows: [['Player', player], ['Amount', `${removing ? '−' : '+'}${fullNumber(amount)}`, true]], confirm: removing ? 'Remove' : 'Add', danger: removing })) return;
+    withBusy(button, async () => {
+      const result = await post(url, { player, amount: removing ? -amount : amount, reason: form.elements.reason.value });
+      toast(describe(result.player));
+      form.reset();
+      await refreshAll();
+    });
+  }
+  $('#balance-form')?.addEventListener('submit', (event) => adjust(event, { url: '/api/admin/balance', noun: 'cash', parse: parseAmount, describe: (player) => `${player.username} now has ${fullNumber(player.balance)}.` }));
+  $('#snipe-form')?.addEventListener('submit', (event) => adjust(event, { url: '/api/admin/snipes', noun: 'snipes', parse: Number, describe: (player) => `${player.username} now has ${fullNumber(player.snipes)} snipes.` }));
+  $('#tournament-form')?.elements.format.addEventListener('change', (event) => { $('#duration-field').hidden = event.target.value !== 'LEADERBOARD'; });
+  $('#tournament-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const form = event.target;
+    const fields = Object.fromEntries(new FormData(form));
+    const prize = parseAmount(fields.winner_prize);
+    if (!prize) { toast('Enter a prize such as 10m.', true); form.elements.winner_prize.focus(); return; }
+    withBusy(event.submitter, async () => {
+      await post('/api/admin/tournaments', { ...fields, winner_prize: prize, max_players: Number(fields.max_players), duration_hours: Number(fields.duration_hours || 24) });
+      toast('Registration is open.');
+      form.reset();
+      $('#duration-field').hidden = true;
+      await loadTournaments(true);
+    });
+  });
+  $('#announcement-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const form = event.target;
+    withBusy(event.submitter, async () => {
+      await post('/api/admin/announcements', { title: form.elements.title.value, message: form.elements.message.value, publish_to_discord: form.elements.discord.checked });
+      toast('Announcement published.');
+      form.reset();
+      await loadAnnouncements();
+    });
+  });
+  $('#announcement-visible')?.addEventListener('change', async (event) => {
+    const toggle = event.target;
+    toggle.disabled = true;
+    try {
+      const { enabled } = await post('/api/admin/announcements/visibility', { enabled: toggle.checked });
+      toast(enabled ? 'Announcements are visible.' : 'Announcements are hidden.');
+      await loadAnnouncements();
+    } catch (error) { toggle.checked = !toggle.checked; toast(error.message, true); }
+    finally { toggle.disabled = false; }
+  });
 
-let statisticTab = 'overview';
-let statisticsEndpoint = '/api/me/statistics';
-let statisticsArePrivate = true;
-function statNumber(value) { return Number(value || 0).toLocaleString(); }
-function memberSince(date) {
-  const parsed = new Date(date);
-  return Number.isNaN(parsed.getTime()) ? 'Unknown' : parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-}
-function renderStatistics(stats) {
-  const wins = Number(stats.wins || 0);
-  const losses = Number(stats.losses || 0);
-  const total = wins + losses;
-  const winRate = total ? ((wins / total) * 100).toFixed(1) : '—';
-  $('#statistics-subtitle').textContent = `View ${stats.username}'s DonutWagers statistics.`;
-  if (statisticTab === 'financial') {
-    $('#statistics-content').innerHTML = `<section class="stat-player-card"><div class="stat-avatar">${stats.avatar_url ? `<img src="${escapeHtml(stats.avatar_url)}">` : 'DW'}</div><div><h3>${escapeHtml(stats.username)}</h3>${renderPlayerTags(stats.tags, 'stat-tags')}<p>${stats.minecraft_username ? `Playing as ${escapeHtml(stats.minecraft_username)}` : 'Minecraft not verified'}</p></div></section><div class="statistics-grid financial-grid"><article><span>AVAILABLE BALANCE</span><b>${statNumber(stats.available_balance)}</b><p>Ready for verified wagers.</p></article><article><span>LOCKED BALANCE</span><b>${statNumber(stats.locked_balance)}</b><p>Currently reserved in matches.</p></article><article><span>VERIFIED DEPOSITS</span><b>${statNumber(stats.total_deposited)}</b><p>${stats.verified_deposits} confirmed deposit${stats.verified_deposits === 1 ? '' : 's'}.</p></article><article><span>ACTIVE MATCHES</span><b>${statNumber(stats.active_matches)}</b><p>Unsettled matches involving this account.</p></article></div>`;
-    return;
-  }
-  const winWidth = total ? Math.round((wins / total) * 100) : 0;
-  $('#statistics-content').innerHTML = `<section class="stat-player-card"><div class="stat-avatar">${stats.avatar_url ? `<img src="${escapeHtml(stats.avatar_url)}">` : 'DW'}</div><div><h3>${escapeHtml(stats.username)}</h3>${renderPlayerTags(stats.tags, 'stat-tags')}<p>Discord ID ${escapeHtml(stats.discord_id)}</p><div class="stat-badges"><span>✓ Discord</span>${stats.minecraft_username ? '<span>✓ Minecraft</span>' : ''}</div></div><div class="stat-streak">Current record<br><b>${wins}W · ${losses}L</b></div></section><div class="statistics-grid"><article><h3>♜ Performance <small>Joined ${memberSince(stats.member_since)}</small></h3><div class="performance-values"><span>Win Rate<b>${winRate}${winRate === '—' ? '' : '%'}</b></span><span>Total Matches<b>${total}</b></span></div><div class="win-loss"><b>${wins}W</b><span>W / L</span><em>${losses}L</em></div><div class="win-loss-bar"><i style="width:${winWidth}%"></i></div></article><article><h3>◉ Match Stats</h3><div class="performance-values"><span>Settled<b>${statNumber(stats.settled_matches)}</b></span><span>Active<b>${statNumber(stats.active_matches)}</b></span></div><p class="stat-copy">Only completed matches count toward a player’s official record.</p></article><article><h3>♛ Tournament</h3><div class="mini-stat"><span>Round wins</span><b>0</b></div><div class="mini-stat"><span>Earnings</span><b>0</b></div></article><article><h3>▣ Account Info</h3><p class="stat-copy">Member since <b>${memberSince(stats.member_since)}</b></p><p class="stat-copy">${stats.minecraft_username ? `Minecraft: ${escapeHtml(stats.minecraft_username)}` : 'Minecraft not verified'}</p></article></div>`;
-  if (stats.tier_badge) $('#statistics-content .stat-player-card h3').insertAdjacentHTML('afterend', renderPlayerTags([], 'stat-tags', stats.tier_badge));
-}
-async function openStatistics(endpoint = '/api/me/statistics', includeFinancial = true) {
-  closeHeaderPopovers();
-  statisticsEndpoint = endpoint;
-  statisticsArePrivate = includeFinancial;
-  statisticTab = 'overview';
-  const financialTab = document.querySelector('[data-stat-tab="financial"]');
-  financialTab.hidden = !includeFinancial;
-  document.querySelectorAll('[data-stat-tab]').forEach((button) => button.classList.toggle('active', button.dataset.statTab === statisticTab));
-  $('#statistics-content').innerHTML = '<p class="statistics-loading">Loading player statistics…</p>';
-  $('#statistics-dialog').showModal();
-  try { renderStatistics(await api(statisticsEndpoint)); }
-  catch (error) { $('#statistics-content').innerHTML = `<p class="statistics-loading">${escapeHtml(error.message)}</p>`; }
-}
-$('#open-statistics').onclick = () => openStatistics();
-document.querySelectorAll('[data-stat-tab]').forEach((button) => button.onclick = async () => {
-  if (button.hidden || !statisticsArePrivate) return;
-  statisticTab = button.dataset.statTab;
-  document.querySelectorAll('[data-stat-tab]').forEach((item) => item.classList.toggle('active', item === button));
-  try { renderStatistics(await api(statisticsEndpoint)); } catch (error) { toast(error.message); }
+  /* ---------- Delegated clicks ---------- */
+  page.on(document, 'click', (event) => {
+    const hit = (selector) => event.target.closest(selector);
+    let button;
+    if ((button = hit('[data-join]'))) joinMatch(button.dataset.join, button);
+    else if ((button = hit('[data-snipe]'))) useSnipe(button.dataset.snipe, button);
+    else if (hit('[data-create]')) openCreate();
+    else if (hit('[data-review-event]')) reviewEvent(hit('[data-review-event]'));
+    else if (hit('[data-audit-more]')) withBusy(hit('[data-audit-more]'), () => loadAudit(true));
+    else if (hit('[data-tiers-refresh]')) refreshTiers(hit('[data-tiers-refresh]'));
+    else if (hit('[data-disconnect]')) disconnectMinecraft(hit('[data-disconnect]'));
+    else if ((button = hit('[data-open-tab]'))) $(`[data-admin-tab="${button.dataset.openTab}"]`).click();
+    else if (hit('[data-clear-filters]')) { filters.region = 'all'; setPressed($$('[data-region]'), $('[data-region="all"]')); selectGame('all'); }
+    else if (hit('[data-wallet-retry]')) openWallet();
+    else if ((button = hit('[data-tournament]'))) tournamentAction(button);
+    else if ((button = hit('[data-resolve]'))) resolveMatch(button);
+    else if ((button = hit('[data-settle]'))) settlePayout(button);
+    else if ((button = hit('[data-unmatched-action]'))) resolveUnmatched(button);
+    else if ((button = hit('[data-admin-player]'))) adminPlayerAction(button);
+  });
+
+  /* ---------- Start ---------- */
+  // Links from before each section had its own address, such as /dashboard#wallet.
+  const legacy = location.hash.slice(1);
+  if (location.pathname === '/matches' && legacy !== 'matches' && VIEWS[legacy]) history.replaceState(history.state, '', `/${legacy}`);
+  const params = new URLSearchParams(location.search);
+  const requestedMode = { CPvP: 'crystal', Sword: 'sword' }[params.get('mode')];
+  if (requestedMode) selectGame(requestedMode); else applyGame(selectedGame());
+  const minecraftErrors = { microsoft_not_configured: 'Microsoft login isn’t set up on this server. Verify with the bot instead.', authorization_cancelled: 'The Microsoft login was cancelled.', invalid_state: 'That Microsoft login expired. Please try again.', invalid_authorization_code: 'Microsoft did not accept that login.', profile_not_linked: 'Verify with the bot to link your Minecraft account.', donut_smp_not_configured: 'Verify with the bot to link your Minecraft account.', provider_failure: 'Microsoft login failed. Please try again.' };
+  if (params.has('minecraft_error')) toast(minecraftErrors[params.get('minecraft_error')] || 'Minecraft could not be linked.', true);
+  if (location.search) history.replaceState(history.state, '', location.pathname);
+  // A verification finishing in its dialog can unlock the wallet form underneath.
+  let wasVerified = isVerified();
+  page.onViewer(() => { if (wasVerified !== isVerified()) { wasVerified = isVerified(); if (currentView === 'wallet') openWallet(); } });
+  showView();
+  if (params.get('create') === '1') openCreate();
+  refresh();
+  loadRail();
+  page.interval(() => { if (!document.hidden) refresh(); }, 15_000);
+  page.on(document, 'visibilitychange', () => { if (!document.hidden) refresh(); });
+  return {
+    /** Called first to ask whether this page shows the address, then with `go` to show it. */
+    navigate(url, go) { if (!viewOf(url.pathname) || url.search) return false; return go ? showView() : true; },
+    destroy() { stopWalletTimers(); gameListeners.delete(applyGame); },
+  };
 });
-$('#statistics-filter').onclick = () => toast('All-time statistics are currently shown.');

@@ -40,21 +40,32 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 public final class App {
     private static final Pattern SIX_DIGIT_CODE = Pattern.compile("^\\d{6}$");
     private static final Pattern MINECRAFT_USERNAME = Pattern.compile("^[A-Za-z0-9_]{3,16}$");
-    // DonutSMP currently emits receipts such as "Astro2G paid you $ 500K".
-    // The optional whitespace after '$' is significant: accepting it makes the
-    // parser agree with the server's actual, signed system-chat formatting.
-    private static final Pattern PAYMENT_RECEIVED_PATTERN = Pattern.compile("^.*?(?:received|receive)\\s+(?:a\\s+)?(?:payment\\s+(?:of|for)\\s+)?\\$?\\s*([0-9][0-9,._]*[kKmMbB]?)(?:\\s+(?:coins?|money))?\\s+from\\s+([A-Za-z0-9_]{3,16}).*$", Pattern.CASE_INSENSITIVE);
+    // Payments are trusted only from server system messages, and only when the whole line is a
+    // receipt. A pattern that ignores what comes before or after would let a player type a
+    // receipt in chat or a private message and be credited for money they never sent.
+    private static final String AMOUNT = "\\$?\\s*([0-9][0-9,]*(?:\\.[0-9]+)?[kKmMbB]?)";
+    private static final String NAME = "([A-Za-z0-9_]{3,16})";
+    private static final int PROTOCOL = 2;
+    private static final int PAYOUT_CONFIRMATION_SECONDS = 20;
+    private static final int DEPOSIT_ATTEMPTS = 6;
+    private static final AtomicReference<PendingPayout> PENDING_PAYOUT = new AtomicReference<>();
+    /** Which capture group is the payer is fixed per pattern. Guessing from the text would let a player
+     * whose name looks like an amount ("999M") swap the two. */
+    private record PaymentPattern(Pattern pattern, boolean payerFirst) { }
+    private record PendingPayout(Withdrawal withdrawal, Runnable confirmed) { }
     private record VerificationMessage(String minecraftUsername, String code) { }
     private record PaymentMessage(String minecraftUsername, long amount) { }
     private record Withdrawal(String id, String minecraftUsername, long amount) { }
@@ -95,7 +106,7 @@ public final class App {
         MinecraftProfile profile = authenticatedAccount.profile();
         String accessToken = authenticatedAccount.accessToken();
         String botUsername = environment("DONUT_WAGERS_BOT_USERNAME", profile.getName());
-        List<Pattern> paymentPatterns = paymentPatterns(botUsername);
+        List<PaymentPattern> paymentPatterns = paymentPatterns();
 
         System.out.println();
         System.out.println("Microsoft authentication successful!");
@@ -124,7 +135,7 @@ public final class App {
                     System.out.println("Bot is online and waiting for private verification messages.");
                     forwardBotHeartbeat(backendClient, backendUrl, webhookSecret, botUsername, true);
                     heartbeat.scheduleAtFixedRate(() -> forwardBotHeartbeat(backendClient, backendUrl, webhookSecret, botUsername, false), 20, 20, TimeUnit.SECONDS);
-                    heartbeat.scheduleWithFixedDelay(() -> pollWithdrawal(backendClient, backendUrl, webhookSecret, client, withdrawalBusy), 5, 5, TimeUnit.SECONDS);
+                    heartbeat.scheduleWithFixedDelay(() -> pollWithdrawal(backendClient, backendUrl, webhookSecret, client, withdrawalBusy, heartbeat), 5, 5, TimeUnit.SECONDS);
                 }
 
             @Override
@@ -136,19 +147,8 @@ public final class App {
                 }
 
                 if (packet instanceof ClientboundDisguisedChatPacket chat) {
-                    String message = plainText(chat.getMessage()).trim();
-                    String sender = plainText(chat.getName()).trim();
-                    String combined = (sender + " " + message).trim();
-                    if (debugChat) {
-                        System.out.printf("Disguised chat: sender=%s content=%s%n", sender, message);
-                        appendDiagnosticMessage("Disguised: " + combined);
-                    }
-                    PaymentMessage payment = extractPayment(message, paymentPatterns, botUsername);
-                    if (payment == null) payment = extractPayment(combined, paymentPatterns, botUsername);
-                    if (payment != null) {
-                        System.out.printf("Received payment confirmation from %s for %,d.%n", payment.minecraftUsername(), payment.amount());
-                        forwardDeposit(backendClient, backendUrl, webhookSecret, payment.minecraftUsername(), payment.amount());
-                    }
+                    // Disguised chat carries player-written text, so it is never a payment signal.
+                    if (debugChat) appendDiagnosticMessage("Disguised: " + (plainText(chat.getName()).trim() + " " + plainText(chat.getMessage()).trim()).trim());
                     return;
                 }
 
@@ -175,10 +175,11 @@ public final class App {
                             forwardVerification(backendClient, backendUrl, webhookSecret, verification.code(), verification.minecraftUsername(), null);
                             return;
                         }
+                        if (confirmPendingPayout(message)) return;
                         PaymentMessage payment = extractPayment(message, paymentPatterns, botUsername);
                         if (payment != null) {
                             System.out.printf("Received payment confirmation from %s for %,d.%n", payment.minecraftUsername(), payment.amount());
-                            forwardDeposit(backendClient, backendUrl, webhookSecret, payment.minecraftUsername(), payment.amount());
+                            forwardDeposit(backendClient, backendUrl, webhookSecret, payment.minecraftUsername(), payment.amount(), UUID.randomUUID().toString(), 1);
                         }
                     }
                 }
@@ -254,9 +255,10 @@ public final class App {
                 });
     }
 
-    private static void forwardDeposit(HttpClient client, String backendUrl, String secret, String minecraftUsername, long amount) {
+    /** One id per receipt, so a retry after a lost reply can never be credited twice. */
+    private static void forwardDeposit(HttpClient client, String backendUrl, String secret, String minecraftUsername, long amount, String transactionId, int attempt) {
         String endpoint = backendUrl.replaceAll("/+$", "") + "/api/wallet/deposits/complete";
-        String payload = "{\"minecraftUsername\":\"" + minecraftUsername + "\",\"amount\":" + amount + "}";
+        String payload = "{\"protocol\":" + PROTOCOL + ",\"minecraftUsername\":\"" + minecraftUsername + "\",\"amount\":" + amount + ",\"transactionId\":\"" + transactionId + "\"}";
         HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint))
                 .timeout(Duration.ofSeconds(15))
                 .header("Content-Type", "application/json")
@@ -265,19 +267,26 @@ public final class App {
                 .build();
         client.sendAsync(request, HttpResponse.BodyHandlers.ofString())
                 .whenComplete((response, error) -> {
-                    if (error != null) {
-                        System.err.println("Unable to verify deposit: " + error.getMessage());
-                    } else if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                    boolean retry = error != null || response.statusCode() >= 500;
+                    if (!retry && response.statusCode() >= 200 && response.statusCode() < 300) {
                         System.out.printf("Credited %,d to %s's DonutWagers wallet.%n", amount, minecraftUsername);
-                    } else {
+                    } else if (!retry) {
                         System.err.printf("Deposit not credited for %s (HTTP %d): %s%n", minecraftUsername, response.statusCode(), response.body());
+                    } else if (attempt < DEPOSIT_ATTEMPTS) {
+                        long delaySeconds = 5L * attempt;
+                        System.err.printf("Deposit for %s could not be delivered. Retrying in %d seconds (%d/%d).%n", minecraftUsername, delaySeconds, attempt, DEPOSIT_ATTEMPTS);
+                        java.util.concurrent.CompletableFuture.delayedExecutor(delaySeconds, TimeUnit.SECONDS)
+                                .execute(() -> forwardDeposit(client, backendUrl, secret, minecraftUsername, amount, transactionId, attempt + 1));
+                    } else {
+                        System.err.printf("DEPOSIT NOT DELIVERED: %s paid %,d (id %s). Credit it from the Admin Panel.%n", minecraftUsername, amount, transactionId);
+                        appendDiagnosticMessage("UNDELIVERED DEPOSIT " + minecraftUsername + " " + amount + " " + transactionId);
                     }
                 });
     }
 
     private static void forwardBotHeartbeat(HttpClient client, String backendUrl, String secret, String botUsername, boolean announce) {
         String endpoint = backendUrl.replaceAll("/+$", "") + "/api/bot/heartbeat";
-        String payload = "{\"botUsername\":\"" + botUsername + "\"}";
+        String payload = "{\"protocol\":" + PROTOCOL + ",\"botUsername\":\"" + botUsername + "\"}";
         HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint))
                 .timeout(Duration.ofSeconds(15))
                 .header("Content-Type", "application/json")
@@ -296,14 +305,14 @@ public final class App {
                 });
     }
 
-    private static void pollWithdrawal(HttpClient client, String backendUrl, String secret, Session session, AtomicBoolean busy) {
+    private static void pollWithdrawal(HttpClient client, String backendUrl, String secret, Session session, AtomicBoolean busy, ScheduledExecutorService scheduler) {
         if (!busy.compareAndSet(false, true)) return;
         String endpoint = backendUrl.replaceAll("/+$", "") + "/api/wallet/withdrawals/next";
         HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint))
                 .timeout(Duration.ofSeconds(15))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + secret)
-                .POST(HttpRequest.BodyPublishers.ofString("{}", StandardCharsets.UTF_8))
+                .POST(HttpRequest.BodyPublishers.ofString("{\"protocol\":" + PROTOCOL + "}", StandardCharsets.UTF_8))
                 .build();
         client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).whenComplete((response, error) -> {
             if (error != null) {
@@ -323,15 +332,67 @@ public final class App {
                 busy.set(false);
                 return;
             }
+            // The payout counts as sent only when the game says so. Without that line the website is told
+            // the result is unknown: the balance stays locked and staff check, instead of guessing.
+            AtomicBoolean answered = new AtomicBoolean(false);
+            PENDING_PAYOUT.set(new PendingPayout(withdrawal, () -> {
+                if (answered.compareAndSet(false, true)) forwardWithdrawalResult(client, backendUrl, secret, withdrawal.id(), "{\"protocol\":" + PROTOCOL + ",\"success\":true}", busy);
+            }));
             try {
                 session.send(new ServerboundChatCommandPacket("pay " + withdrawal.minecraftUsername() + " " + withdrawal.amount()));
-                System.out.printf("Sent withdrawal command for %,d to %s.%n", withdrawal.amount(), withdrawal.minecraftUsername());
-                forwardWithdrawalResult(client, backendUrl, secret, withdrawal.id(), true, null, busy);
+                System.out.printf("Sent withdrawal command for %,d to %s. Waiting for the game to confirm it.%n", withdrawal.amount(), withdrawal.minecraftUsername());
             } catch (Exception sendError) {
                 System.err.println("Unable to send withdrawal command: " + sendError.getMessage());
-                forwardWithdrawalResult(client, backendUrl, secret, withdrawal.id(), false, sendError.getMessage(), busy);
+            }
+            try {
+                scheduler.schedule(() -> {
+                    if (answered.compareAndSet(false, true)) {
+                        PENDING_PAYOUT.set(null);
+                        System.err.printf("No confirmation for withdrawal %s. Staff must check it.%n", withdrawal.id());
+                        forwardWithdrawalResult(client, backendUrl, secret, withdrawal.id(), "{\"protocol\":" + PROTOCOL + ",\"outcome\":\"unknown\"}", busy);
+                    }
+                }, PAYOUT_CONFIRMATION_SECONDS, TimeUnit.SECONDS);
+            } catch (java.util.concurrent.RejectedExecutionException disconnected) {
+                // The website moves an unanswered payout to review by itself after two minutes.
+                busy.set(false);
             }
         });
+    }
+
+    /** True when this system message confirms the payout that is waiting. */
+    private static boolean confirmPendingPayout(String message) {
+        PendingPayout pending = PENDING_PAYOUT.get();
+        if (pending == null) return false;
+        for (Pattern pattern : payoutPatterns()) {
+            var matcher = pattern.matcher(message);
+            if (!matcher.matches()) continue;
+            String first = matcher.group(1);
+            String second = matcher.group(2);
+            boolean nameFirst = first.equalsIgnoreCase(pending.withdrawal().minecraftUsername());
+            String name = nameFirst ? first : second;
+            Long amount = parseAmount(nameFirst ? second : first);
+            if (name.equalsIgnoreCase(pending.withdrawal().minecraftUsername()) && amount != null && payoutAmountMatches(amount, pending.withdrawal().amount()) && PENDING_PAYOUT.compareAndSet(pending, null)) {
+                pending.confirmed().run();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The game may show what was sent or what arrived after DonutSMP's tax (DONUT_WAGERS_PAY_TAX_PERCENT, default 2). */
+    private static boolean payoutAmountMatches(long shown, long sent) {
+        BigDecimal percent = new BigDecimal(environment("DONUT_WAGERS_PAY_TAX_PERCENT", "2"));
+        long tax = BigDecimal.valueOf(sent).multiply(percent).divide(BigDecimal.valueOf(100), 0, RoundingMode.CEILING).longValueExact();
+        return shown <= sent && shown >= sent - tax;
+    }
+
+    private static List<Pattern> payoutPatterns() {
+        List<Pattern> patterns = new ArrayList<>();
+        String expression = System.getenv("DONUT_WAGERS_PAYOUT_REGEX");
+        if (expression != null && !expression.isBlank()) patterns.add(Pattern.compile(expression));
+        patterns.add(Pattern.compile("^You (?:have )?(?:paid|sent) " + NAME + " " + AMOUNT + "\\.?$", Pattern.CASE_INSENSITIVE));
+        patterns.add(Pattern.compile("^You (?:have )?(?:paid|sent) " + AMOUNT + " to " + NAME + "\\.?$", Pattern.CASE_INSENSITIVE));
+        return patterns;
     }
 
     private static Withdrawal parseWithdrawal(String body) {
@@ -343,10 +404,8 @@ public final class App {
         catch (RuntimeException error) { return null; }
     }
 
-    private static void forwardWithdrawalResult(HttpClient client, String backendUrl, String secret, String id, boolean success, String errorMessage, AtomicBoolean busy) {
+    private static void forwardWithdrawalResult(HttpClient client, String backendUrl, String secret, String id, String payload, AtomicBoolean busy) {
         String endpoint = backendUrl.replaceAll("/+$", "") + "/api/wallet/withdrawals/" + id + "/complete";
-        String safeError = errorMessage == null ? "" : errorMessage.replace("\\", "\\\\").replace("\"", "\\\"");
-        String payload = "{\"success\":" + success + (success ? "" : ",\"error\":\"" + safeError + "\"") + "}";
         HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint))
                 .timeout(Duration.ofSeconds(15))
                 .header("Content-Type", "application/json")
@@ -356,7 +415,7 @@ public final class App {
         client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).whenComplete((response, requestError) -> {
             if (requestError != null) System.err.println("Unable to confirm withdrawal: " + requestError.getMessage());
             else if (response.statusCode() < 200 || response.statusCode() >= 300) System.err.printf("Withdrawal completion rejected (HTTP %d): %s%n", response.statusCode(), response.body());
-            else System.out.println(success ? "Withdrawal marked complete." : "Failed withdrawal released.");
+            else System.out.println("Withdrawal result recorded.");
             busy.set(false);
         });
     }
@@ -415,38 +474,29 @@ public final class App {
         return patterns;
     }
 
-    private static List<Pattern> paymentPatterns(String botUsername) {
-        List<Pattern> patterns = new ArrayList<>();
+    private static List<PaymentPattern> paymentPatterns() {
+        List<PaymentPattern> patterns = new ArrayList<>();
         String expression = System.getenv("DONUT_WAGERS_PAYMENT_REGEX");
         if (expression != null && !expression.isBlank()) {
             Pattern pattern = Pattern.compile(expression);
             if (pattern.matcher("").groupCount() < 2) {
                 throw new IllegalStateException("DONUT_WAGERS_PAYMENT_REGEX must have capture group 1 for the sender and group 2 for the amount.");
             }
-            patterns.add(pattern);
+            patterns.add(new PaymentPattern(pattern, true));
         }
-        patterns.add(Pattern.compile("^([A-Za-z0-9_]{3,16})\\s+(?:has\\s+)?(?:paid|sent)\\s+(?:you|" + Pattern.quote(botUsername) + ")\\s+\\$?\\s*([0-9][0-9,._]*[kKmMbB]?).*$", Pattern.CASE_INSENSITIVE));
-        patterns.add(Pattern.compile("^(?:Payment\\s+)?(?:received\\s+)?from\\s+([A-Za-z0-9_]{3,16})\\s*(?::|-)?\\s*\\$?\\s*([0-9][0-9,._]*[kKmMbB]?).*$", Pattern.CASE_INSENSITIVE));
+        patterns.add(new PaymentPattern(Pattern.compile("^" + NAME + " (?:has )?(?:paid|sent) you " + AMOUNT + "\\.?$", Pattern.CASE_INSENSITIVE), true));
+        patterns.add(new PaymentPattern(Pattern.compile("^You (?:have )?received " + AMOUNT + " from " + NAME + "\\.?$", Pattern.CASE_INSENSITIVE), false));
         return patterns;
     }
 
-    private static PaymentMessage extractPayment(String message, List<Pattern> patterns, String botUsername) {
-        var received = PAYMENT_RECEIVED_PATTERN.matcher(message);
-        if (received.matches()) {
-            Long amount = parseAmount(received.group(1));
-            String sender = received.group(2);
-            if (amount != null && MINECRAFT_USERNAME.matcher(sender).matches() && !sender.equalsIgnoreCase(botUsername)) {
-                return new PaymentMessage(sender, amount);
-            }
-        }
-        for (Pattern pattern : patterns) {
-            var matcher = pattern.matcher(message);
+    private static PaymentMessage extractPayment(String message, List<PaymentPattern> patterns, String botUsername) {
+        for (PaymentPattern candidate : patterns) {
+            var matcher = candidate.pattern().matcher(message);
+            // matches() covers the whole line, so nothing may come before or after the receipt.
             if (!matcher.matches()) continue;
-            String sender = matcher.group(1);
-            Long amount = parseAmount(matcher.group(2));
-            if (amount != null && MINECRAFT_USERNAME.matcher(sender).matches() && !sender.equalsIgnoreCase(botUsername)) {
-                return new PaymentMessage(sender, amount);
-            }
+            String sender = matcher.group(candidate.payerFirst() ? 1 : 2);
+            Long amount = parseAmount(matcher.group(candidate.payerFirst() ? 2 : 1));
+            if (amount != null && MINECRAFT_USERNAME.matcher(sender).matches() && !sender.equalsIgnoreCase(botUsername)) return new PaymentMessage(sender, amount);
         }
         return null;
     }
@@ -459,7 +509,8 @@ public final class App {
             if (normalized.endsWith("m")) { multiplier = BigDecimal.valueOf(1_000_000); normalized = normalized.substring(0, normalized.length() - 1); }
             if (normalized.endsWith("b")) { multiplier = BigDecimal.valueOf(1_000_000_000); normalized = normalized.substring(0, normalized.length() - 1); }
             long amount = new BigDecimal(normalized).multiply(multiplier).setScale(0, RoundingMode.UNNECESSARY).longValueExact();
-            return amount >= 100_000 ? amount : null;
+            // Low enough for a deposit after DonutSMP's tax; the website checks the real minimum.
+            return amount >= 1_000 ? amount : null;
         } catch (RuntimeException error) {
             return null;
         }
