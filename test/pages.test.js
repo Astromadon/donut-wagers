@@ -61,7 +61,7 @@ test('pages, permissions, and the shared homepage', async () => {
     for (const marker of ['id="admin"', 'admin-switches', 'ban-dialog']) assert.ok(owner.html.includes(marker), marker);
     assert.match((await get('/matches/abc123')).html, /next=%2Fmatches%2Fabc123/);
     assert.equal((await get('/dashboard', 'session-1')).location, '/matches');
-    for (const pathname of ['/shop', '/gift-cards', '/referrals', '/teams']) assert.match((await get(pathname)).html, /yet|right now/, `${pathname} says it is not available`);
+    for (const pathname of ['/shop', '/gift-cards', '/teams']) assert.match((await get(pathname)).html, /yet|right now/, `${pathname} says it is not available`);
     assert.equal((await get('/profile/bank', 'session-1')).status, 404);
     // Networks without a configured address are left out, never pointed at a guess.
     assert.match(signedOut.html, /class="social social-discord"/);

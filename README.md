@@ -101,7 +101,7 @@ Open matches close after 30 minutes if nobody joins, and the creator’s entry i
 - Every page is `views/shell.html` (background, sidebar, top bar, menus, footer) around one content view from `views/`. The server fills in the account controls, so the homepage is the same page signed in or out and nothing flashes while loading.
 - Links switch pages without reloading the frame. `public/shell.js` fetches the next page, swaps `#page`, and runs that page's script. A page script calls `registerPage(view, (page) => { ... })` and starts timers and listeners through `page`, so they stop when the visitor moves on.
 - `/` is the homepage for everyone. `/matches`, `/tournaments`, `/leaderboard`, `/wallet`, `/profile` (with `/matches`, `/transactions`, `/connections` tabs), `/settings`, and `/admin` share `views/app.html` and ask signed-out visitors to log in. `/dashboard` redirects to `/matches`.
-- `/shop`, `/gift-cards`, `/referrals`, and `/teams` have no backend yet and say so. Their text is `SOON_PAGES` in `server.js`.
+- `/shop`, `/gift-cards`, and `/teams` have no backend yet and say so. Their text is `SOON_PAGES` in `server.js`.
 - `public/styles.css` holds the design tokens and shared components. Gold (`--accent`, `--gold`) marks selection, focus, currency, and the main action. Green (`--good`) only means won, gained, or working.
 - The background is `public/pattern.svg`, one seamless tile moved by a CSS transform. It stays still for reduced motion or when switched off in Settings.
 - Static files are listed in `STATIC_FILES` in `server.js`; a new file in `public/` is not served until it is added there.
@@ -115,6 +115,7 @@ Third-party assets, all stored locally: Inter (SIL OFL 1.1, via @fontsource-vari
 - [Deployment](docs/DEPLOYMENT.md): first deployment, data migration, going back
 - [Operations](docs/OPERATIONS.md): backup, recovery, monitoring, incidents, capacity
 - [PvP tiers](docs/TIERS.md): MCTiers integration
+- [Referrals](docs/REFERRALS.md): links, the 1M reward, review rules
 - [Match pages](docs/MATCHES.md): match page, history, spectators, rematch, data
 - [AI Support](docs/AI_SUPPORT.md): the support page, turning AI answers on, limits, privacy
 - [Security](docs/SECURITY.md) and [Testing](docs/TESTING.md)

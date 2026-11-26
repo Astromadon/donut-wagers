@@ -13,6 +13,7 @@
 - [ ] Minecraft commercial use and item textures checked against Mojang's guidelines
 - [ ] Security contact published
 - [ ] Match rules in `lib/match-rules.js` reviewed (disconnect and forfeit rules, allowed and banned mods, kit wording are new policy)
+- [ ] Referral rewards checked against promotion and incentive rules where you operate
 - [ ] MCTiers' terms checked for this use of their public API
 
 ## Staging

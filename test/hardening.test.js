@@ -13,7 +13,7 @@ const { seed } = require('./support/seed');
 const production = { NODE_ENV: 'production', DATABASE_URL: 'x', DISCORD_CLIENT_ID: '1', DISCORD_CLIENT_SECRET: 'secret', APP_BASE_URL: 'https://a.test', DISCORD_REDIRECT_URI: 'https://a.test/cb', DONUT_WAGERS_ADMIN_DISCORD_ID: '900000000000000000' };
 
 test('in production matchmaking and deposits start off until the owner switches them on', () => {
-  assert.deepEqual(loadConfig(production).features, { wagers: false, deposits: false, withdrawals: true, tournaments: true, snipes: true, chat: true, tickets: true, verification: true, signups: true, aiSupport: true });
+  assert.deepEqual(loadConfig(production).features, { wagers: false, deposits: false, withdrawals: true, tournaments: true, snipes: true, chat: true, tickets: true, verification: true, signups: true, aiSupport: true, referrals: true });
   assert.equal(loadConfig(production).features.wagers, false, 'off until the owner turns it on');
   assert.ok(loadConfig(production).warnings.some((text) => text.includes('TERMS_URL')));
   const open = loadConfig({ ...production, WAGERS_ENABLED: 'true', DEPOSITS_ENABLED: 'true' });

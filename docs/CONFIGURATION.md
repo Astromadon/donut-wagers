@@ -26,6 +26,7 @@ Settings are read from the environment (`.env` locally). `lib/config.js` checks 
 | `ALERT_WEBHOOK_URL` | recommended | Discord webhook for errors; at most one message per 10 minutes |
 | `DONUTSMP_PAY_TAX_PERCENT` | no | DonutSMP's cut of each `/pay` (2). Deposits ask players to send extra; withdrawals show what arrives. Keep it equal to the bot's `DONUT_WAGERS_PAY_TAX_PERCENT` |
 | `MCTIERS_ENABLED`, `MCTIERS_API_URL`, `MCTIERS_REFRESH_HOURS` | no | PvP tiers from the public MCTiers API (on, `https://mctiers.net/api/v2`, 12 hours); see [TIERS.md](TIERS.md) |
+| `REFERRAL_REWARD`, `REFERRAL_AUTO_PER_DAY` | no | Paid to a referrer per qualifying invite (1,000,000), and how many a day are paid without review (10); see [REFERRALS.md](REFERRALS.md) |
 | `SKIN_HEADS_ENABLED` | no | `false` stops the server fetching Minecraft skin heads from mc-heads.net; initials show instead |
 | `ANTHROPIC_API_KEY` | no | Turns on AI answers in AI Support. Server only. Without it the page offers help articles and Talk to a person; see [AI_SUPPORT.md](AI_SUPPORT.md) |
 | `SUPPORT_AI_MODEL`, `SUPPORT_AI_EFFORT`, `SUPPORT_AI_FALLBACKS` | no | Model (`claude-opus-5-5`), effort (`low`), and whether the API may fall back to another model when overloaded (on) |

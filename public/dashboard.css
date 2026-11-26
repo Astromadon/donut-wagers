@@ -399,3 +399,31 @@ a.history-row:hover { background: var(--panel-2); }
 .versus-score { color: var(--text); font-size: 15px; }
 .lobby-more { display: flex; grid-column: 1 / -1; justify-content: center; padding: 8px 0; }
 @media (max-width: 640px) { .lobby-search, .lobby-search .input { width: 100%; } }
+
+/* Referrals */
+.referral-hero { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 24px; align-items: center; padding: 24px; border-color: var(--accent-line); background: linear-gradient(135deg, var(--accent-wash), var(--panel) 60%); }
+.referral-hero small, .referral-link label { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.referral-hero h2 { margin: 4px 0 8px; font-size: clamp(22px, 2.4vw, 30px); font-weight: 850; line-height: 1.15; }
+.referral-hero h2 b { color: var(--accent-2); }
+.referral-hero p { color: var(--text-2); }
+.referral-link { display: grid; gap: 8px; }
+.referral-link > div { display: flex; gap: 8px; }
+.referral-link .input { min-width: 0; font-family: ui-monospace, monospace; font-size: 13px; }
+.referral-link > small { color: var(--text-2); font-size: 13px; }
+.referral-link .text-link { padding: 0; border: 0; background: none; font: inherit; }
+.referral-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
+.referral-stats > div { padding: 14px 16px; }
+.referral-stats dt { color: var(--text-3); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+.referral-stats dd { margin-top: 2px; font-size: 22px; font-weight: 850; }
+.referral-list { display: grid; padding: 0 20px 14px; }
+.referral-list li { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+.referral-list li > div { flex: 1; min-width: 0; }
+.referral-list b { display: block; }
+.referral-list small { color: var(--text-3); font-size: 12.5px; }
+.avatar-initial { display: grid; flex: none; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--panel-3); color: var(--text-2); font-weight: 800; }
+.referral-rules { display: grid; gap: 8px; padding: 0 20px 20px 40px; color: var(--text-2); list-style: decimal; }
+.referral-code > div { display: flex; gap: 8px; padding: 0 20px; }
+.referral-code .input { max-width: 200px; text-transform: uppercase; font-family: ui-monospace, monospace; }
+.referral-code small { display: block; padding: 8px 20px 20px; color: var(--text-3); font-size: 12.5px; }
+#referrals .form-card { margin-top: 16px; }
+@media (max-width: 860px) { .referral-hero { grid-template-columns: minmax(0, 1fr); } .referral-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

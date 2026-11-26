@@ -15,3 +15,9 @@ The owner can switch parts of the site off for a while, for example matchmaking,
 
 ## Currency
 DonutWagers uses DonutSMP in-game money only. Amounts can be typed as 500k, 5m, 1.5m or as full numbers.
+
+## Referrals
+- Your personal link is on the Referrals page in the sidebar. Copy it and send it to friends.
+- You get 1,000,000 once per friend who signs up through your link, verifies their Minecraft account, confirms they are 18 or older, and settles their first wager against someone other than you.
+- Your friend gets nothing extra. Existing accounts cannot be added later, except by entering your code in their first 48 hours, before their first settled match.
+- Rewards for the same person on two accounts, or many in one day, are checked by staff first. Fake accounts and arranged matches are rejected and can lead to a ban.

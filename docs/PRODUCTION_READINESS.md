@@ -113,3 +113,7 @@ Tested locally only. Not deployed.
 Test totals now: 73 API and unit tests (Postgres test skipped without a test database) and 40 browser tests, all passing.
 
 Needs review before launch: the drafted rules in `lib/match-rules.js` (disconnect, forfeit, allowed and banned mods), MCTiers' terms, and mc-heads.net as a third party (listed in the privacy policy).
+
+## Update, 26 November 2026: referrals
+
+Referral links and a 1,000,000 reward per invited player who verifies Minecraft and settles a first wager against someone other than the referrer. Held for owner review on the same Minecraft account, more than 10 a day, or when switched off. Verified by 5 API tests and 1 browser test (now 78 API/unit and 41 browser tests passing). Not verified: whether referral rewards are allowed where you operate. Not deployed.

@@ -653,3 +653,18 @@ test('lobby: completed tab, player search, and names that open profiles instead 
   await expect(page.locator('#match-search')).toHaveValue('rival');
   await expect(page.getByRole('group', { name: 'Match status' }).getByRole('button', { name: 'Completed' })).toHaveAttribute('aria-pressed', 'true');
 });
+
+test('referrals: a personal link, the people invited, and a code box for new accounts', async ({ page, server, signIn }) => {
+  server.edit((db) => { Object.assign(db.users[5], { referred_by: 'u1', referred_at: new Date().toISOString() }); db.users[8].created_at = new Date().toISOString(); });
+  await signIn(1);
+  await page.goto(`${server.base}/referrals`);
+  await expect(page.getByRole('heading', { name: /Earn 1M for every friend/ })).toBeVisible();
+  const link = await page.locator('#referral-link-input').inputValue();
+  expect(link).toMatch(/\/r\/[A-HJ-NP-Z2-9]{8}$/);
+  await expect(page.locator('.referral-list')).toContainText('Slate');
+  await expect(page.locator('.referral-stats')).toContainText('Invited');
+  await page.getByRole('button', { name: 'Copy link' }).click();
+  await expect(page.locator('#toast')).toHaveText('Referral link copied.');
+  const { violations } = await new AxeBuilder({ page }).include('#referrals').withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze();
+  expect(violations.map((v) => `${v.id} ${v.nodes[0].target}`)).toEqual([]);
+});
