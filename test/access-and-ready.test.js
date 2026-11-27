@@ -34,6 +34,22 @@ test('opponent identity stays hidden until both players ready up', () => {
   assert.equal(revealed.opponent_minecraft_username, 'OpponentMC');
 });
 
+test('the owner playing their own match cannot see the opponent before both are ready', () => {
+  const owner = { id: 'owner', discord_id: '900000000000000000', discord_username: 'Astro', player_tags: [], minecraft_verified: true, minecraft_username: 'Astro2G' };
+  const opponent = { id: 'opponent', discord_id: '900000000000000009', discord_username: 'Kraken1x', player_tags: [], minecraft_verified: true, minecraft_username: 'truefv', minecraft_uuid: 'abc' };
+  const stranger = { id: 'stranger', discord_username: 'Someone', player_tags: [] };
+  const own = { id: 'm1', match_code: 'own', creator_id: owner.id, opponent_id: opponent.id, status: 'READY_UP', ready_user_ids: [], wager_amount: 1, created_at: new Date().toISOString() };
+  const view = publicMatchForViewer(own, [owner, opponent], owner);
+  assert.equal(view.creator, 'Astro');
+  assert.equal(view.opponent, 'Hidden until ready');
+  for (const field of ['opponent_id', 'opponent_minecraft_username', 'opponent_minecraft_uuid', 'opponent_discord_id', 'opponent_tier', 'opponent_avatar_url', 'opponent_cosmetics']) assert.equal(view[field], null, field);
+  // Watching other players' match, staff still see both names.
+  const others = { ...own, id: 'm2', creator_id: stranger.id };
+  const watching = publicMatchForViewer(others, [owner, opponent, stranger], owner);
+  assert.equal(watching.creator, 'Someone');
+  assert.equal(watching.opponent, 'Kraken1x');
+});
+
 test('player search finds linked Minecraft usernames case-insensitively', () => {
   const db = { users: [
     { id: 'one', discord_id: '100', discord_username: 'Astro', minecraft_username: 'Astro2G' },

@@ -457,7 +457,9 @@ function publicMatchForViewer(match, users, viewer) {
   visible.rematch_offer = viewerIsParticipant ? { mine: choiceOf(viewer.id), theirs: choiceOf(otherId) } : null;
   visible.viewer_role = viewerIsParticipant ? 'participant' : isStaff(viewer) ? 'staff' : 'spectator';
   visible.viewer_reported_score = viewerIsParticipant ? submissions[viewer.id]?.score || null : null;
-  if (identitiesRevealed || isStaff(viewer)) return visible;
+  // Staff watching someone else's match see both players. Staff playing their own match are
+  // a player like any other: they must not see who they are up against before both are ready.
+  if (identitiesRevealed || (isStaff(viewer) && !viewerIsParticipant)) return visible;
   const isParticipant = Boolean(viewer && [match.creator_id, match.opponent_id].includes(viewer.id));
   if (!isParticipant) {
     hideSide(visible, 'creator');

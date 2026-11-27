@@ -81,6 +81,22 @@ test('leaving a match room stops its polling', async ({ page, server, signIn }) 
   expect(calls).toEqual([]);
 });
 
+test('your unfinished matches sit in the sidebar, and the opponent stays hidden until ready', async ({ page, server, signIn }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await signIn(0);
+  await page.goto(`${server.base}/leaderboard`);
+  const links = page.locator('#my-matches-list a');
+  await expect(links).toHaveCount(3);
+  await expect(links.locator('.side-match-state')).toHaveText(['Open', 'Ready', 'Live']);
+  await links.filter({ hasText: 'Ready' }).click();
+  await expect(page).toHaveURL(`${server.base}/matches/code3aa`);
+  await expect(links.filter({ hasText: 'Ready' })).toHaveAttribute('aria-current', 'page');
+  // The owner created this match; the joining player is hidden like for anyone else.
+  const joining = page.locator('.player-card.is-opponent');
+  await expect(joining).toContainText('Hidden until ready');
+  await expect(joining).not.toContainText('RivalTest');
+});
+
 test('account menu: mouse, keyboard, Escape, and outside click', async ({ page, server, signIn }) => {
   await signIn(0);
   await page.goto(`${server.base}/matches`);
@@ -313,8 +329,10 @@ test.describe('PvP tiers', () => {
     await expect(page.locator('.player-card .tier-badge')).toHaveText(['Unranked', 'HT1']);
     await page.goto(`${server.base}/matches`);
     await page.getByRole('button', { name: /Ongoing/ }).click();
-    const mine = page.locator('.match-card', { hasText: 'RivalTest' });
+    // The owner's own ready-up match: their badge shows, the opponent stays hidden, even for staff.
+    const mine = page.locator('.match-card', { hasText: 'OwnerTest' }).filter({ hasNotText: 'Pyre' });
     await expect(mine.locator('.tier-badge')).toHaveText(['HT1']);
+    await expect(page.locator('.match-card', { hasText: 'RivalTest' })).toHaveCount(0);
     await page.getByRole('button', { name: 'Create Match' }).click();
     await expect(page.locator('#create-tier')).toContainText('High Tier 1');
     await page.locator('#match-dialog').getByRole('button', { name: 'Sword' }).click();

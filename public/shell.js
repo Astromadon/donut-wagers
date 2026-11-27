@@ -335,11 +335,26 @@ $('#game-menu').addEventListener('click', (event) => {
 });
 renderGame();
 
-/* ---------- Recently played ---------- */
+/* ---------- Your matches and recently played ---------- */
+// Matches you are still in, so a creator who leaves the page can get straight back to it.
+const LIVE_STATES = { OPEN: ['Open', 'is-waiting'], READY_UP: ['Ready', 'is-ready'], IN_PROGRESS: ['Live', 'is-live'], DISPUTED: ['Review', 'is-review'] };
+function renderMyMatches(matches) {
+  const current = matches.filter((match) => LIVE_STATES[match.status]).slice(0, 5);
+  $('#my-matches').hidden = !current.length;
+  const here = location.pathname;
+  const markup = current.map((match) => {
+    const [state, tone] = LIVE_STATES[match.status];
+    const href = matchHref(match);
+    return `<a href="${escapeHtml(href)}" class="side-match"${here === href ? ' aria-current="page"' : ''} title="1v1 ${modeName(match)}, ${state}">${icon('swords')}<span class="label">${modeName(match).replace(/ PvP$/, '')}</span><span class="side-match-state label ${tone}">${state}</span></a>`;
+  }).join('');
+  if ($('#my-matches-list').dataset.markup !== markup) { $('#my-matches-list').innerHTML = markup; $('#my-matches-list').dataset.markup = markup; }
+}
 async function loadRecent() {
   if (!me) return;
   try {
-    const played = (await api('/api/me/matches')).filter((match) => match.status === 'COMPLETED').slice(0, 3);
+    const matches = await api('/api/me/matches');
+    renderMyMatches(matches);
+    const played = matches.filter((match) => match.status === 'COMPLETED').slice(0, 3);
     $('#recent').hidden = !played.length;
     const markup = played.map((match) => `<a href="${escapeHtml(matchHref(match))}" title="${modeName(match)}, ${timeAgo(match.settled_at || match.created_at)}">${icon('clock')}<span class="label">1v1 ${modeName(match)}</span></a>`).join('');
     if ($('#recent-list').dataset.markup !== markup) { $('#recent-list').innerHTML = markup; $('#recent-list').dataset.markup = markup; }

@@ -88,6 +88,8 @@ a.room-chip:hover { border-color: var(--accent-line); color: var(--accent-2); }
 .player-head img { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; object-fit: cover; image-rendering: pixelated; background: var(--panel-3); }
 .player-initials { font-size: 22px; font-weight: 800; }
 .player-head .icon { width: 24px; height: 24px; }
+.player-head.is-unknown { font-size: 24px; font-weight: 800; color: var(--text-3); }
+.player-hidden-note { font-weight: 700; }
 .player-head.is-waiting { border-style: dashed; animation: wait-breathe 2.6s ease-in-out infinite; }
 @keyframes wait-breathe { 50% { opacity: .55; } }
 .player-info { display: grid; gap: 7px; min-width: 0; }
