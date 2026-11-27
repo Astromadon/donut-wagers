@@ -345,7 +345,8 @@ function renderMyMatches(matches) {
   const markup = current.map((match) => {
     const [state, tone] = LIVE_STATES[match.status];
     const href = matchHref(match);
-    return `<a href="${escapeHtml(href)}" class="side-match"${here === href ? ' aria-current="page"' : ''} title="1v1 ${modeName(match)}, ${state}">${icon('swords')}<span class="label">${modeName(match).replace(/ PvP$/, '')}</span><span class="side-match-state label ${tone}">${state}</span></a>`;
+    // Highlighted like the reference: the row stands out so it is found at a glance. A coloured dot gives the state.
+    return `<a href="${escapeHtml(href)}" class="side-match ${tone}"${here === href ? ' aria-current="page"' : ''} title="1v1 ${modeName(match)}: ${state}">${icon('swords')}<span class="label">1v1 ${modeName(match)}</span><span class="side-match-state ${tone}" data-state="${state}"><span class="sr-only">${state}</span></span></a>`;
   }).join('');
   if ($('#my-matches-list').dataset.markup !== markup) { $('#my-matches-list').innerHTML = markup; $('#my-matches-list').dataset.markup = markup; }
 }
