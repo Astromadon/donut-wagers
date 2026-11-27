@@ -28,12 +28,16 @@ class DiscordTicketService {
       signal: AbortSignal.timeout(10_000),
       headers: {
         Authorization: `Bot ${this.botToken}`,
-        'Content-Type': 'application/json',
+        // Discord answers 400 "invalid JSON" when this header is sent without a body (unban, add role).
+        ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
         ...(options.headers || {}),
       },
     });
     if (!response.ok) {
-      throw new DiscordTicketServiceError('Discord rejected the ticket request.', response.status);
+      const detail = await response.json().catch(() => null);
+      const error = new DiscordTicketServiceError('Discord rejected the ticket request.', response.status);
+      error.discordCode = typeof detail?.code === 'number' ? detail.code : undefined;
+      throw error;
     }
     return response.status === 204 ? null : response.json();
   }
@@ -125,10 +129,17 @@ class DiscordTicketService {
   async unbanGuildMember(discordId, reason = 'DonutWagers ban revoked') {
     if (!this.isConfigured()) throw new DiscordTicketServiceError('Discord moderation is not configured.', 503);
     if (!/^\d{17,20}$/.test(String(discordId || ''))) throw new DiscordTicketServiceError('Invalid Discord user ID.', 400);
-    await this.request(`/guilds/${this.guildId}/bans/${encodeURIComponent(discordId)}`, {
-      method: 'DELETE',
-      headers: { 'X-Audit-Log-Reason': encodeURIComponent(String(reason).slice(0, 350)) },
-    });
+    try {
+      await this.request(`/guilds/${this.guildId}/bans/${encodeURIComponent(discordId)}`, {
+        method: 'DELETE',
+        headers: { 'X-Audit-Log-Reason': encodeURIComponent(String(reason).slice(0, 350)) },
+      });
+    } catch (error) {
+      // 404 "Unknown Ban": they are not banned on Discord (unbanned by hand, or banned before sync). Nothing to undo.
+      if (error instanceof DiscordTicketServiceError && error.status === 404) return 'not_banned';
+      throw error;
+    }
+    return 'unbanned';
   }
 }
 

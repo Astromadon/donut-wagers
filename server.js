@@ -2816,7 +2816,7 @@ async function handleRequest(request, response, requestId) {
         try {
           await discordTicketService.banGuildMember(candidate.discord_id, banReason);
         } catch (error) {
-          observability.log('error', 'discord_ban_failed', { status: error instanceof DiscordTicketServiceError ? error.status : undefined });
+          observability.log('error', 'discord_ban_failed', { status: error instanceof DiscordTicketServiceError ? error.status : undefined, discord_code: error?.discordCode });
           return sendJson(response, 502, { error: 'Discord could not ban this player. Check the bot permissions and role hierarchy; the website ban was not created.' });
         }
       }
@@ -2866,7 +2866,7 @@ async function handleRequest(request, response, requestId) {
         try {
           await discordTicketService.unbanGuildMember(player.discord_id);
         } catch (error) {
-          observability.log('error', 'discord_unban_failed', { status: error instanceof DiscordTicketServiceError ? error.status : undefined });
+          observability.log('error', 'discord_unban_failed', { status: error instanceof DiscordTicketServiceError ? error.status : undefined, discord_code: error?.discordCode });
           return sendJson(response, 502, { error: 'Discord could not unban this player. Check the bot permissions; the website ban remains active.' });
         }
       }
