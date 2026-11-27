@@ -19,6 +19,8 @@ const { rulesFor, checkScore } = require('./lib/match-rules');
 const { createSkinHeads } = require('./lib/skin-heads');
 const { createReferrals } = require('./lib/referrals');
 const { createMojangLookup } = require('./lib/mojang');
+const shop = require('./lib/shop');
+const cashback = require('./lib/cashback');
 const { createSupportService } = require('./lib/support-service');
 const { createMctiersProvider, createTierSync, mergeResult, publicTiers, tierForKit, isAccountId } = require('./lib/tiers');
 
@@ -90,7 +92,7 @@ function loadEnvFile() {
 }
 
 function emptyDb() {
-  return { users: [], sessions: [], matches: [], tournaments: [], announcements: [], settings: { announcements_enabled: true }, minecraft_accounts: [], verification_codes: [], wagers: [], deposits: [], withdrawals: [], audit_logs: [], support_tickets: [], bans: [], unmatched_payments: [], security_events: [], support_conversations: [], support_requests: [], referral_rewards: [], referrals: [], referral_claims: [], minecraft_identities: [], bot_status: { last_heartbeat_at: null, bot_username: donutSmpService.botUsername } };
+  return { users: [], sessions: [], matches: [], tournaments: [], announcements: [], settings: { announcements_enabled: true }, minecraft_accounts: [], verification_codes: [], wagers: [], deposits: [], withdrawals: [], audit_logs: [], support_tickets: [], bans: [], unmatched_payments: [], security_events: [], support_conversations: [], support_requests: [], referral_rewards: [], referrals: [], referral_claims: [], minecraft_identities: [], shop_products: [], inventory_events: [], cashback_entries: [], cashback_claims: [], bot_status: { last_heartbeat_at: null, bot_username: donutSmpService.botUsername } };
 }
 function normalizeDb(db) {
   db ??= emptyDb();
@@ -120,6 +122,8 @@ function normalizeDb(db) {
   // Only a hash of each session token is stored, so a leaked database cannot be used to sign in.
   for (const session of db.sessions) if (!session.hashed) { session.id = hashToken(session.id); session.hashed = true; }
   db.bot_status ??= { last_heartbeat_at: null, bot_username: donutSmpService.botUsername };
+  for (const name of ['shop_products', 'inventory_events', 'cashback_entries', 'cashback_claims']) db[name] ??= [];
+  liveCatalog = db.shop_products;
   for (const user of db.users) {
     if (user.minecraft_uuid === undefined) user.minecraft_uuid = null;
     if (user.minecraft_username === undefined) user.minecraft_username = null;
@@ -282,7 +286,11 @@ function createMatchCode(db) {
 function findMatch(db, code) { return db.matches.find((match) => match.match_code === code || match.id === code); }
 /* ---------- Match history: events, snapshots and scores ---------- */
 const MATCH_EVENT_LIMIT = 150;
-const SIDE_FIELDS = ['id', '', 'tags', 'tier', 'minecraft_username', 'minecraft_uuid', 'avatar_url', 'discord_id'];
+const SIDE_FIELDS = ['id', '', 'tags', 'tier', 'minecraft_username', 'minecraft_uuid', 'avatar_url', 'discord_id', 'cosmetics'];
+// The catalog from the last read, so player payloads can show equipped cosmetics without passing db around.
+let liveCatalog = [];
+/** Equipped title and border, checked against what the player owns and what is in the catalog. */
+const cosmetics = (user) => (user && !user.deleted_at ? shop.cosmeticsOf({ shop_products: liveCatalog }, user) : null);
 const sideOf = (match, userId) => (userId && userId === match.creator_id ? 'creator' : userId && userId === match.opponent_id ? 'opponent' : null);
 /** Appends one entry to a match's own history. Entries name sides, never people, so hidden players stay hidden. */
 function matchEvent(match, type, fields = {}, at = new Date().toISOString()) {
@@ -356,6 +364,8 @@ function publicMatch(match, users) {
     opponent_minecraft_uuid: opponent?.minecraft_verified ? opponent.minecraft_uuid || null : null,
     creator_avatar_url: avatarUrl(creator),
     opponent_avatar_url: avatarUrl(opponent),
+    creator_cosmetics: cosmetics(creator),
+    opponent_cosmetics: cosmetics(opponent),
     creator_discord_id: creator && !creator.deleted_at ? creator.discord_id : null,
     opponent_discord_id: opponent && !opponent.deleted_at ? opponent.discord_id : null,
     winner: match.winner_id ? users.find((user) => user.id === match.winner_id)?.discord_username || null : null,
@@ -729,7 +739,7 @@ function leaderboardRows(db, period, mode = null) {
     const user = db.users.find((candidate) => candidate.id === entry.user_id);
     // Deleted and banned accounts never appear on a public board.
     if (!user || user.deleted_at || activeBan(db, user.id)) return [];
-    return [{ ...entry, profit: entry.earned - entry.lost, played: entry.wins + entry.losses, discord_id: user.discord_id, username: user.discord_username, avatar_url: avatarUrl(user), minecraft_uuid: user.minecraft_verified ? user.minecraft_uuid || null : null, tags: playerTags(user), tiers: siteTiers(user), minecraft_username: user.minecraft_verified ? user.minecraft_username : null }];
+    return [{ ...entry, profit: entry.earned - entry.lost, played: entry.wins + entry.losses, discord_id: user.discord_id, username: user.discord_username, avatar_url: avatarUrl(user), minecraft_uuid: user.minecraft_verified ? user.minecraft_uuid || null : null, tags: playerTags(user), cosmetics: cosmetics(user), tiers: siteTiers(user), minecraft_username: user.minecraft_verified ? user.minecraft_username : null }];
   });
   if (boardCache.size > 50) boardCache.clear();
   boardCache.set(key, { at: Date.now(), rows: result });
@@ -755,12 +765,20 @@ function walletHistory(db, user) {
     entries.push({ id: tournament.id, type: 'tournament_prize', status: 'completed', amount: money(tournament.winner_prize), created_at: tournament.prize_paid_at, label: tournament.name });
   }
   for (const item of db.referral_claims || []) if (item.user_id === user.id && item.amount) entries.push({ id: item.id, type: 'referral_reward', status: 'completed', amount: money(item.amount), created_at: item.claimed_at });
+  for (const item of db.inventory_events || []) if (item.user_id === user.id && item.type === 'purchase') entries.push({ id: item.id, type: 'shop_purchase', status: 'completed', amount: -money(item.price), created_at: item.created_at, label: item.name });
+  for (const item of db.cashback_claims || []) if (item.user_id === user.id) entries.push({ id: item.id, type: 'cashback', status: 'completed', amount: money(item.amount), created_at: item.created_at });
   for (const item of db.referral_rewards || []) if (item.referrer_id === user.id && item.status === 'paid') entries.push({ id: item.id, type: 'referral_reward', status: 'completed', amount: money(item.amount), created_at: item.paid_at });
   return entries.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 40);
 }
 function notificationsFor(db, user) {
   const items = [];
   const push = (id, tone, title, body, created_at, href = null) => items.push({ id, tone, title, body, created_at, href });
+  for (const item of db.inventory_events || []) {
+    if (item.user_id !== user.id) continue;
+    if (item.type === 'consume') push(`protector-${item.id}`, 'good', 'Streak protected', `A Streak Protector kept your ${item.streak}-win streak. ${item.remaining ? `${item.remaining} left.` : 'That was your last one.'}`, item.created_at, '/shop#inventory');
+    if (item.type === 'restore') push(`protector-${item.id}`, 'good', 'Streak Protector returned', 'A result was changed, so the protector you used is back.', item.created_at, '/shop#inventory');
+    if (item.type === 'grant' || item.type === 'revoke') push(`item-${item.id}`, item.type === 'grant' ? 'good' : 'warn', item.type === 'grant' ? 'Item added' : 'Item removed', `Staff ${item.type === 'grant' ? 'added' : 'removed'} ${item.name}${item.quantity > 1 ? ` ×${item.quantity}` : ''}.`, item.created_at, '/shop#inventory');
+  }
   for (const match of db.matches) {
     if (![match.creator_id, match.opponent_id].includes(user.id)) continue;
     const href = matchPath(match);
@@ -995,7 +1013,7 @@ function liveFingerprints(db, watched) {
   const parts = new Map([...watched.users].map((id) => [id, []]));
   for (const user of db.users) {
     const own = parts.get(user.id);
-    if (own) own.push(ledger(user.balance), money(user.locked_balance), user.snipes, user.minecraft_verified, user.minecraft_username, user.break_until, user.eligibility_confirmed_at, user.tiers?.synced_at, user.tiers?.error, (user.player_tags || []).join(','), user.featured_match_id);
+    if (own) own.push(ledger(user.balance), money(user.locked_balance), user.snipes, user.minecraft_verified, user.minecraft_username, user.break_until, user.eligibility_confirmed_at, user.tiers?.synced_at, user.tiers?.error, (user.player_tags || []).join(','), user.featured_match_id, user.equipped_title, user.equipped_border, user.streak_protectors, user.streak_protection_enabled, (user.owned_titles || []).length, (user.owned_borders || []).length);
   }
   const lobby = [];
   const matches = new Map();
@@ -1070,6 +1088,7 @@ function playerOverview(db, user) {
     discord_id: user.discord_id,
     avatar_url: avatarUrl(user),
     tags: playerTags(user),
+    cosmetics: cosmetics(user),
     tiers: publicTiers(user, TIER_OPTIONS),
     minecraft_username: user.minecraft_verified ? user.minecraft_username : null,
     minecraft_verified: Boolean(user.minecraft_verified),
@@ -1101,7 +1120,18 @@ function playerStatistics(db, user, { mode = null, own = false } = {}) {
   const sum = (list, value) => list.reduce((total, item) => total + value(item), 0);
   let best = 0;
   let run = 0;
-  for (const match of [...matches].reverse()) { run = match.winner_id === user.id ? run + 1 : 0; best = Math.max(best, run); }
+  let natural = 0;
+  let bestNatural = 0;
+  let protectedRun = false;
+  for (const match of [...matches].reverse()) {
+    const won = match.winner_id === user.id;
+    natural = won ? natural + 1 : 0;
+    bestNatural = Math.max(bestNatural, natural);
+    if (isProtectedLoss(match, user.id)) { protectedRun = run > 0; continue; }
+    if (!won) protectedRun = false;
+    run = won ? run + 1 : 0;
+    best = Math.max(best, run);
+  }
   const played = sum(paid, (match) => money(match.wager_amount));
   const profit = sum(paid, (match) => matchProfit(match, user.id));
   const prizes = db.tournaments.filter((tournament) => tournament.winner_id === user.id && tournament.prize_paid_at && (!mode || modeOf(tournament) === mode));
@@ -1118,6 +1148,9 @@ function playerStatistics(db, user, { mode = null, own = false } = {}) {
     settled_matches: matches.length,
     best_streak: best,
     current_streak: run,
+    // A streak kept by a Streak Protector is marked, and the uninterrupted record is shown beside it.
+    current_streak_protected: protectedRun && run > 0,
+    best_natural_streak: bestNatural,
     total_profit: profit,
     total_earned: sum(wins, (match) => money(match.wager_amount) && money(match.payout_amount)),
     total_played: played,
@@ -1146,9 +1179,10 @@ function money(value) { return Math.max(0, Math.trunc(Number(value) || 0)); }
 /** A stored balance. Unlike money(), it may be negative: overturning a result after the
  * winner spent the payout leaves a debt, and clamping that to zero would create currency. */
 function ledger(value) { return Math.trunc(Number(value) || 0); }
+const PLATFORM_FEE_BPS = 1000;
 function payoutForMatch(match) {
   const total = money(match.wager_amount) * 2;
-  const platformFee = Math.floor(total * 0.10);
+  const platformFee = Math.floor(total * PLATFORM_FEE_BPS / 10_000);
   return { total, platformFee, winnerPayout: total - platformFee };
 }
 function unlockMatchFunds(match, creator, opponent) {
@@ -1172,6 +1206,7 @@ function settleMatch(db, match, winnerId, actorId, source) {
   const opponent = db.users.find((user) => user.id === match.opponent_id);
   if (!creator || !opponent) throw new Error('Both match participants are required before a result can be settled.');
   if (![creator.id, opponent.id].includes(winnerId)) throw new Error('The selected winner is not in this match.');
+  const firstSettlement = match.status !== 'COMPLETED';
   if (match.status === 'COMPLETED') {
     if (match.winner_id === winnerId) return { changed: false, match };
     reverseSettlement(match, creator, opponent);
@@ -1195,11 +1230,45 @@ function settleMatch(db, match, winnerId, actorId, source) {
   match.settled_at = new Date().toISOString();
   const wagerRecord = db.wagers.find((item) => item.id === match.id);
   if (wagerRecord) { wagerRecord.status = match.status; wagerRecord.winner_id = winner.id; wagerRecord.updated_at = match.settled_at; }
+  applyStreakProtection(db, match, winner, loser);
+  if (firstSettlement) cashback.recordSettlement(db, match);
   if (before === 'DISPUTED') matchEvent(match, 'dispute_resolved', { winner_side: sideOf(match, winner.id) }, match.settled_at);
   matchEvent(match, before === 'COMPLETED' ? 'result_corrected' : 'concluded', { winner_side: sideOf(match, winner.id), score: finalScore(match), source }, match.settled_at);
   audit(db, actorId, source === 'admin_override' ? 'match_result_overturned' : 'match_result_settled', { wager_id: match.id, winner_id: winner.id, payout_amount: winnerPayout, platform_fee: platformFee, source });
   advanceTournament(db, match, actorId);
   return { changed: true, match };
+}
+
+const isProtectedLoss = (match, userId) => match.winner_id !== userId && (match.streak_protected || []).includes(userId);
+/** Wins in a row before this match, newest first. A protected loss neither adds nor ends the run. */
+function currentStreak(db, userId, excludeId = null) {
+  let run = 0;
+  for (const match of settledMatchesFor(db, userId)) {
+    if (match.id === excludeId || isProtectedLoss(match, userId)) continue;
+    if (match.winner_id !== userId) break;
+    run += 1;
+  }
+  return run;
+}
+/**
+ * Runs inside settlement. The loser keeps their streak by spending one Streak Protector if protection is
+ * on, they have one, and there is a streak to keep. If staff later give the match to the other player,
+ * the protector goes back to whoever spent it, and the new loser is checked the same way.
+ */
+function applyStreakProtection(db, match, winner, loser) {
+  match.streak_protected ??= [];
+  if (match.streak_protected.includes(winner.id)) {
+    match.streak_protected = match.streak_protected.filter((id) => id !== winner.id);
+    winner.streak_protectors = shop.inventoryOf(winner).protectors + 1;
+    shop.record(db, { type: 'restore', user_id: winner.id, product_id: null, category: 'protectors', name: 'Streak Protector', quantity: 1, price: 0, match_id: match.id, reason: 'Result changed: the protected loss became a win' });
+  }
+  const inventory = shop.inventoryOf(loser);
+  if (match.streak_protected.includes(loser.id) || !inventory.protection_enabled || inventory.protectors < 1) return;
+  const streak = currentStreak(db, loser.id, match.id);
+  if (streak < 1) return;
+  loser.streak_protectors = inventory.protectors - 1;
+  match.streak_protected.push(loser.id);
+  shop.record(db, { type: 'consume', user_id: loser.id, product_id: null, category: 'protectors', name: 'Streak Protector', quantity: 1, price: 0, match_id: match.id, streak, remaining: loser.streak_protectors });
 }
 
 /** Everything stored about one account, without other players' private data. */
@@ -1216,6 +1285,8 @@ function exportAccount(db, user) {
     matches: db.matches.filter((match) => [match.creator_id, match.opponent_id].includes(user.id)).map((match) => ({ match_code: match.match_code, game_mode: match.game_mode, rules: match.rules, wager_amount: match.wager_amount, status: match.status, won: match.winner_id ? match.winner_id === user.id : null, created_at: match.created_at, settled_at: match.settled_at || null, messages: (match.chat_messages || []).filter((message) => message.user_id === user.id).map((message) => ({ body: message.body, created_at: message.created_at })) })),
     ...supportService.exportFor(db, user.id),
     referrals: { code: user.referral_code || null, referred_by: user.referred_by ? 'yes' : null, invited: (db.referrals || []).filter((item) => item.referrer_id === user.id).map((item) => ({ status: item.status, created_at: item.created_at, qualified_at: item.qualified_at })), claims: (db.referral_claims || []).filter((item) => item.user_id === user.id).map(({ milestone, snipes, amount, claimed_at }) => ({ milestone, snipes, amount, claimed_at })), earlier_rewards: (db.referral_rewards || []).filter((item) => item.referrer_id === user.id).map((item) => ({ amount: item.amount, status: item.status, created_at: item.created_at, paid_at: item.paid_at })) },
+    shop: own(db.inventory_events || []).map(({ type, name, quantity, price, created_at }) => ({ type, name, quantity, price, created_at })),
+    cashback: { claims: own(db.cashback_claims || []).map(({ step, amount, created_at }) => ({ step, amount, created_at })), entries: own(db.cashback_entries || []).map(({ stake, status, created_at }) => ({ stake, status, created_at })) },
     activity: own(db.audit_logs).map((entry) => ({ action: entry.action, details: entry.details, created_at: entry.created_at })),
   };
 }
@@ -1232,7 +1303,7 @@ function deleteAccount(db, userId) {
   if (ledger(user.balance) >= MIN_WITHDRAWAL_AMOUNT) return { error: 'Withdraw your balance first. Deleting the account would lose it.' };
   const now = new Date().toISOString();
   audit(db, userId, 'account_deleted', { forfeited_balance: ledger(user.balance) });
-  Object.assign(user, { discord_id: `deleted-${user.id}`, discord_username: 'Deleted player', discord_avatar: null, balance: 0, locked_balance: 0, snipes: 0, minecraft_uuid: null, minecraft_username: null, minecraft_verified: false, minecraft_verified_at: null, player_tags: [], favorites: [], featured_match_id: null, tiers: null, tier_badge: null, tier_results: [], deleted_at: now });
+  Object.assign(user, { discord_id: `deleted-${user.id}`, discord_username: 'Deleted player', discord_avatar: null, balance: 0, locked_balance: 0, snipes: 0, streak_protectors: 0, owned_titles: [], owned_borders: [], equipped_title: null, equipped_border: null, minecraft_uuid: null, minecraft_username: null, minecraft_verified: false, minecraft_verified_at: null, player_tags: [], favorites: [], featured_match_id: null, tiers: null, tier_badge: null, tier_results: [], deleted_at: now });
   db.sessions = db.sessions.filter((item) => item.user_id !== userId);
   db.minecraft_accounts = db.minecraft_accounts.filter((item) => item.user_id !== userId);
   db.verification_codes = db.verification_codes.filter((item) => item.user_id !== userId);
@@ -1270,6 +1341,7 @@ const STATIC_FILES = {
   '/dashboard.js': 'application/javascript; charset=utf-8',
   '/match.js': 'application/javascript; charset=utf-8',
   '/support.js': 'application/javascript; charset=utf-8',
+  '/shop.js': 'application/javascript; charset=utf-8',
   '/items/snipe.png': 'image/png',
   '/items/end-crystal.png': 'image/png',
   '/items/diamond-sword.png': 'image/png',
@@ -1280,11 +1352,11 @@ const STATIC_FILES = {
   '/og-image.png': 'image/png',
   '/dw-logo-128.png': 'image/png',
 };
+for (const art of shop.BORDER_ARTS) for (const file of [art, `${art}-static`]) STATIC_FILES[`/borders/${file}.svg`] = 'image/svg+xml';
 // Every page is the same shell (views/shell.html) around one content view.
-const APP_VIEWS = { '/matches': 'Matches', '/tournaments': 'Tournaments', '/leaderboard': 'Leaderboard', '/wallet': 'Wallet', '/profile': 'Profile settings', '/profile/matches': 'Match history', '/profile/transactions': 'Transactions', '/profile/connections': 'Connections', '/settings': 'Settings', '/support': 'AI Support', '/referrals': 'Referrals', '/admin': 'Admin' };
+const APP_VIEWS = { '/matches': 'Matches', '/tournaments': 'Tournaments', '/leaderboard': 'Leaderboard', '/wallet': 'Wallet', '/profile': 'Profile settings', '/profile/matches': 'Match history', '/profile/transactions': 'Transactions', '/profile/connections': 'Connections', '/settings': 'Settings', '/support': 'AI Support', '/referrals': 'Referrals', '/cashback': 'Cashback', '/shop': 'Shop', '/admin': 'Admin' };
 // Sections the platform does not offer yet. Each page says so instead of pretending.
 const SOON_PAGES = {
-  '/shop': ['Shop', 'bag', 'The shop isn’t open yet', 'Nothing is on sale. When it opens, purchases will use your DonutWagers balance.'],
   '/gift-cards': ['Gift cards', 'gift', 'Gift cards aren’t available yet', 'You can’t buy or redeem gift cards right now.'],
   '/teams': ['Teams', 'users', 'Teams aren’t available yet', 'Every match is 1v1 for now, so there are no teams to manage.'],
 };
@@ -1327,7 +1399,7 @@ function shortAmount(value) {
   return amount.toLocaleString('en-US');
 }
 function viewerPayload(user) {
-  return { id: user.id, username: user.discord_username, discord_id: user.discord_id, avatar_url: avatarUrl(user), tags: playerTags(user), tiers: publicTiers(user, TIER_OPTIONS), tiers_refresh_at: tiersRefreshAt(user), minecraft_name_hint: nameHint(user), balance: availableBalance(user), total_balance: money(user.balance), locked_balance: money(user.locked_balance), snipes: Number(user.snipes || 0), wins: user.wins, losses: user.losses, minecraft_account: user.minecraft_username, minecraft_uuid: user.minecraft_uuid, minecraft_username: user.minecraft_username, minecraft_verified: user.minecraft_verified, minecraft_verified_at: user.minecraft_verified_at, access_role: staffRole(user), is_owner: isOwner(user), is_admin: isAdmin(user), features: siteFeatures(), minimum_age: CONFIG.minimumAge, pay_tax_percent: CONFIG.payTaxBps / 100, age_confirmed: isAgeConfirmed(user), break_until: onBreak(user) ? user.break_until : null, donut_smp_status: donutSmpService.status() };
+  return { id: user.id, username: user.discord_username, discord_id: user.discord_id, avatar_url: avatarUrl(user), tags: playerTags(user), tiers: publicTiers(user, TIER_OPTIONS), tiers_refresh_at: tiersRefreshAt(user), minecraft_name_hint: nameHint(user), balance: availableBalance(user), total_balance: money(user.balance), locked_balance: money(user.locked_balance), snipes: Number(user.snipes || 0), wins: user.wins, losses: user.losses, minecraft_account: user.minecraft_username, minecraft_uuid: user.minecraft_uuid, minecraft_username: user.minecraft_username, minecraft_verified: user.minecraft_verified, minecraft_verified_at: user.minecraft_verified_at, access_role: staffRole(user), is_owner: isOwner(user), is_admin: isAdmin(user), features: siteFeatures(), minimum_age: CONFIG.minimumAge, pay_tax_percent: CONFIG.payTaxBps / 100, age_confirmed: isAgeConfirmed(user), break_until: onBreak(user) ? user.break_until : null, donut_smp_status: donutSmpService.status(), cosmetics: cosmetics(user), streak_protectors: shop.inventoryOf(user).protectors, streak_protection_enabled: shop.inventoryOf(user).protection_enabled };
 }
 let adminMarkup = '';
 const readView = (name) => fs.readFile(path.join(ROOT, 'views', `${name}.html`), 'utf8');
@@ -1425,7 +1497,7 @@ async function serveStatic(request, response, pathname) {
 }
 /** Only local app pages may be used as a post-login destination. */
 function safeNextPath(value) {
-  return /^\/(?:(?:matches|tournaments|leaderboard|wallet|profile(?:\/(?:matches|transactions|connections))?|settings|admin|dashboard|shop|gift-cards|referrals|teams)(?:\?(?:mode=(?:CPvP|Sword)|create=1))?(?:#[a-z]+)?|matches\/[a-zA-Z0-9-]+)$/.test(String(value || '')) ? String(value) : null;
+  return /^\/(?:(?:matches|tournaments|leaderboard|wallet|profile(?:\/(?:matches|transactions|connections))?|settings|admin|dashboard|shop|gift-cards|referrals|cashback|teams)(?:\?(?:mode=(?:CPvP|Sword)|create=1))?(?:#[a-z]+)?|matches\/[a-zA-Z0-9-]+)$/.test(String(value || '')) ? String(value) : null;
 }
 
 async function handleDiscordCallback(request, response, url) {
@@ -1801,6 +1873,264 @@ async function handleRequest(request, response, requestId) {
       const user = await currentUser(request);
       if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
       return sendJson(response, 200, viewerPayload(user));
+    }
+    /* ---------- Shop, inventory and cosmetics ---------- */
+    if (request.method === 'GET' && url.pathname === '/api/shop') {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      const db = await readDb();
+      const settings = shop.shopSettings(db);
+      const stored = db.users.find((item) => item.id === user.id) || user;
+      const inventory = shop.inventoryOf(stored);
+      const products = db.shop_products.filter((item) => item.enabled).sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || a.price - b.price).map((item) => shop.publicProduct(item, stored));
+      const owned = (ids) => ids.map((id) => db.shop_products.find((item) => item.id === id)).filter(Boolean).map((item) => shop.publicProduct(item, stored));
+      return sendJson(response, 200, {
+        enabled: settings.enabled,
+        categories: Object.entries(shop.CATEGORIES).map(([id, item]) => ({ id, label: item.label, enabled: settings.enabled && settings.categories[id] })),
+        products,
+        balance: availableBalance(stored),
+        inventory: { ...inventory, titles: owned(inventory.titles), borders: owned(inventory.borders) },
+        preview: { username: stored.discord_username, avatar_url: avatarUrl(stored), minecraft_username: stored.minecraft_verified ? stored.minecraft_username : null, minecraft_uuid: stored.minecraft_verified ? stored.minecraft_uuid : null, minecraft_verified: Boolean(stored.minecraft_verified), tiers: publicTiers(stored, TIER_OPTIONS), tags: playerTags(stored), cosmetics: cosmetics(stored) },
+        history: db.inventory_events.filter((item) => item.user_id === user.id).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).slice(0, 30).map(({ id, type, name, category, quantity, price, created_at }) => ({ id, type, name, category, quantity, price, created_at })),
+      });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/shop/purchase') {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      const body = await readJson(request);
+      const productId = String(body.product_id || '').slice(0, 80);
+      const requestId = String(body.request_id || '').slice(0, 80);
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const stored = db.users.find((item) => item.id === user.id);
+        if (!stored || activeBan(db, stored.id)) return { status: 403, error: 'This account cannot buy items.' };
+        if (onBreak(stored)) return { status: 403, error: `You’re taking a break until ${new Date(stored.break_until).toUTCString()}.`, code: 'ON_BREAK' };
+        if (!isAgeConfirmed(stored)) return { status: 403, error: `Confirm that you are at least ${CONFIG.minimumAge} before you continue.`, code: 'AGE_CONFIRMATION_REQUIRED' };
+        const result = shop.purchase(db, stored, { productId, requestId }, { available: availableBalance });
+        if (result.error) return result;
+        if (!result.repeated) {
+          audit(db, stored.id, 'shop_purchase', { product_id: result.event.product_id, name: result.event.name, quantity: result.event.quantity, price: result.event.price, balance_after: result.event.balance_after });
+          await writeDb(db);
+        }
+        return { ...result, balance: availableBalance(stored), inventory: shop.inventoryOf(stored) };
+      });
+      if (outcome.error) return sendJson(response, outcome.status, { error: outcome.error, code: outcome.code });
+      const { name, quantity, price, category } = outcome.event;
+      return sendJson(response, outcome.status, { purchased: true, repeated: Boolean(outcome.repeated), item: { name, quantity, price, category }, balance: outcome.balance, snipes: outcome.inventory.snipes, streak_protectors: outcome.inventory.protectors });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/me/equip') {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      const body = await readJson(request);
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const stored = db.users.find((item) => item.id === user.id);
+        if (!stored) return { status: 404, error: 'Account not found.' };
+        const productId = body.product_id === null ? null : String(body.product_id || '').slice(0, 80);
+        const result = shop.equip(db, stored, { slot: String(body.slot || ''), productId });
+        if (result.error) return result;
+        await writeDb(db);
+        return { status: 200, cosmetics: shop.cosmeticsOf(db, stored) };
+      });
+      return sendJson(response, outcome.status, outcome.error ? { error: outcome.error, code: outcome.code } : { cosmetics: outcome.cosmetics });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/me/streak-protection') {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      const { enabled } = await readJson(request);
+      if (typeof enabled !== 'boolean') return sendJson(response, 400, { error: 'Choose on or off.' });
+      await withEscrowMutation(async () => {
+        const db = await readDb();
+        const stored = db.users.find((item) => item.id === user.id);
+        if (!stored) return;
+        stored.streak_protection_enabled = enabled;
+        audit(db, stored.id, 'streak_protection_changed', { enabled });
+        await writeDb(db);
+      });
+      return sendJson(response, 200, { streak_protection_enabled: enabled });
+    }
+    /* ---------- Cashback ---------- */
+    if (request.method === 'GET' && url.pathname === '/api/me/cashback') {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      const db = await readDb();
+      const stored = db.users.find((item) => item.id === user.id) || user;
+      return sendJson(response, 200, { ...cashback.overview(db, stored), minecraft_verified: Boolean(stored.minecraft_verified) });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/me/cashback/claim') {
+      const user = await currentUser(request);
+      if (!user) return sendJson(response, 401, { error: 'Authentication required.' });
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const stored = db.users.find((item) => item.id === user.id);
+        if (!stored) return { status: 404, error: 'Account not found.' };
+        const verified = Boolean(stored.minecraft_verified && db.minecraft_accounts.some((item) => item.user_id === stored.id && item.verified));
+        const result = cashback.claim(db, stored, { verified, banned: Boolean(activeBan(db, stored.id)) });
+        if (result.error) return result;
+        audit(db, stored.id, 'cashback_claimed', { amount: result.amount, steps: result.claims.map((item) => item.step) });
+        await writeDb(db);
+        return result;
+      });
+      return sendJson(response, outcome.status, outcome.error ? { error: outcome.error, code: outcome.code } : { claimed: true, amount: outcome.amount, steps: outcome.steps });
+    }
+    /* ---------- Admin: shop ---------- */
+    if (request.method === 'GET' && url.pathname === '/api/admin/shop') {
+      const user = await currentUser(request);
+      if (!requireAdmin(response, user)) return;
+      const db = await readDb();
+      const name = (id) => db.users.find((item) => item.id === id)?.discord_username || 'Unknown';
+      const purchases = db.inventory_events.filter((item) => item.type === 'purchase');
+      const sales = (id) => purchases.filter((item) => item.product_id === id);
+      return sendJson(response, 200, {
+        settings: shop.shopSettings(db),
+        categories: Object.entries(shop.CATEGORIES).map(([id, item]) => ({ id, label: item.label })),
+        rarities: shop.RARITIES,
+        border_arts: shop.BORDER_ARTS,
+        products: [...db.shop_products].sort((a, b) => a.category.localeCompare(b.category) || (a.sort ?? 0) - (b.sort ?? 0)).map((item) => ({ ...item, sold: sales(item.id).length, revenue: sales(item.id).reduce((sum, sale) => sum + sale.price, 0) })),
+        totals: { purchases: purchases.length, revenue: purchases.reduce((sum, item) => sum + item.price, 0), protectors_used: db.inventory_events.filter((item) => item.type === 'consume').length },
+        events: [...db.inventory_events].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).slice(0, 60).map((item) => ({ ...item, username: name(item.user_id), actor: item.actor_id ? name(item.actor_id) : null })),
+      });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/admin/shop/settings') {
+      const user = await currentUser(request);
+      if (!requireAdmin(response, user)) return;
+      const body = await readJson(request);
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const before = shop.shopSettings(db);
+        // Flat body: { enabled } for the whole shop, or { category, enabled } for one category.
+        if (typeof body.enabled !== 'boolean' || (body.category !== undefined && !shop.CATEGORIES[body.category])) return { status: 400, error: 'Choose on or off.' };
+        const next = { enabled: body.category ? before.enabled : body.enabled, categories: { ...before.categories, ...(body.category ? { [body.category]: body.enabled } : {}) } };
+        db.settings.shop = next;
+        audit(db, user.id, 'shop_settings_changed', { previous: before, next });
+        await writeDb(db);
+        return { status: 200, settings: next };
+      });
+      return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : { settings: outcome.settings });
+    }
+    if (request.method === 'POST' && /^\/api\/admin\/shop\/products(?:\/[^/]+)?$/.test(url.pathname)) {
+      const user = await currentUser(request);
+      if (!requireAdmin(response, user)) return;
+      const productId = url.pathname.split('/')[5] ? decodeURIComponent(url.pathname.split('/')[5]) : null;
+      const body = await readJson(request);
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const existing = productId ? db.shop_products.find((item) => item.id === productId) : null;
+        if (productId && !existing) return { status: 404, error: 'Item not found.' };
+        const checked = shop.validateProduct(body, existing);
+        if (checked.error) return { status: 400, error: checked.error };
+        const now = new Date().toISOString();
+        if (existing) {
+          const previous = { ...existing };
+          Object.assign(existing, checked.product, { updated_at: now });
+          audit(db, user.id, 'shop_product_updated', { product_id: existing.id, previous, next: { ...existing } });
+          await writeDb(db);
+          return { status: 200, product: existing };
+        }
+        const product = { id: `${checked.product.category}-${checked.product.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${crypto.randomBytes(2).toString('hex')}`, ...checked.product, sort: db.shop_products.filter((item) => item.category === checked.product.category).length, created_at: now, updated_at: now };
+        db.shop_products.push(product);
+        audit(db, user.id, 'shop_product_created', { product });
+        await writeDb(db);
+        return { status: 201, product };
+      });
+      return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : { product: outcome.product });
+    }
+    if (request.method === 'POST' && /^\/api\/admin\/players\/[^/]+\/items$/.test(url.pathname)) {
+      const user = await currentUser(request);
+      if (!requireAdmin(response, user)) return;
+      const discordId = decodeURIComponent(url.pathname.split('/')[4]);
+      const body = await readJson(request);
+      const reason = String(body.reason || '').trim().slice(0, 300);
+      if (reason.length < 3) return sendJson(response, 400, { error: 'Give a reason. It is kept in the audit log.' });
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const target = db.users.find((item) => item.discord_id === discordId);
+        if (!target) return { status: 404, error: 'Player not found.' };
+        const before = shop.inventoryOf(target);
+        const result = shop.adjust(db, target, { productId: String(body.product_id || ''), action: String(body.action || ''), quantity: body.quantity ?? 1, actorId: user.id, reason });
+        if (result.error) return result;
+        audit(db, user.id, result.event.type === 'grant' ? 'shop_item_granted' : 'shop_item_revoked', { target_user_id: target.id, product_id: result.event.product_id, quantity: result.event.quantity, reason, previous: before, next: shop.inventoryOf(target) });
+        await writeDb(db);
+        return { status: 200, inventory: shop.inventoryOf(target) };
+      });
+      return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : { inventory: outcome.inventory });
+    }
+    /* ---------- Admin: cashback ---------- */
+    if (request.method === 'GET' && url.pathname === '/api/admin/cashback') {
+      const user = await currentUser(request);
+      if (!requireAdmin(response, user)) return;
+      const db = await readDb();
+      const settings = cashback.cashbackSettings(db);
+      const name = (id) => db.users.find((item) => item.id === id)?.discord_username || 'Unknown';
+      const entries = db.cashback_entries;
+      const volume = (status) => entries.filter((item) => item.status === status).reduce((sum, item) => sum + item.stake, 0);
+      const weekAgo = Date.now() - 7 * 86_400_000;
+      const pairs = new Map();
+      for (const item of entries) if (Date.parse(item.created_at) > weekAgo && item.user_id < item.opponent_id) { const key = `${item.user_id}:${item.opponent_id}`; pairs.set(key, (pairs.get(key) || 0) + 1); }
+      return sendJson(response, 200, {
+        settings,
+        economics: cashback.economics(settings, PLATFORM_FEE_BPS),
+        totals: { distributed: db.cashback_claims.reduce((sum, item) => sum + item.amount, 0), claims: db.cashback_claims.length, counted: volume('counted'), held: volume('held'), capped: volume('capped'), voided: volume('voided') },
+        held: entries.filter((item) => item.status === 'held').slice(-100).reverse().map((item) => ({ ...item, username: name(item.user_id), opponent: name(item.opponent_id), match_code: db.matches.find((match) => match.id === item.match_id)?.match_code || null })),
+        claims: [...db.cashback_claims].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).slice(0, 50).map((item) => ({ ...item, username: name(item.user_id) })),
+        frequent_pairs: [...pairs].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([key, count]) => ({ players: key.split(':').map(name), matches: count })),
+      });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/admin/cashback/settings') {
+      const user = await currentUser(request);
+      if (!requireAdmin(response, user)) return;
+      const body = await readJson(request);
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const before = cashback.cashbackSettings(db);
+        const checked = cashback.validateSettings(body, before);
+        if (checked.error) return { status: 400, error: checked.error };
+        const economics = cashback.economics(checked.settings, PLATFORM_FEE_BPS);
+        // Switching on is refused while the rate pays out more than the fee brings in.
+        if (checked.settings.enabled && !economics.safe) return { status: 409, error: economics.summary, code: 'UNSAFE_RATE' };
+        db.settings.cashback = checked.settings;
+        audit(db, user.id, 'cashback_settings_changed', { previous: before, next: checked.settings, reason: String(body.reason || '').slice(0, 300) || null });
+        await writeDb(db);
+        return { status: 200, settings: checked.settings, economics };
+      });
+      return sendJson(response, outcome.status, outcome.error ? { error: outcome.error, code: outcome.code } : { settings: outcome.settings, economics: outcome.economics });
+    }
+    if (request.method === 'POST' && /^\/api\/admin\/cashback\/entries\/[^/]+\/(approve|void)$/.test(url.pathname)) {
+      const user = await currentUser(request);
+      if (!requireAdmin(response, user)) return;
+      const [, , , , , entryId, action] = url.pathname.split('/');
+      const reason = String((await readJson(request)).reason || '').trim().slice(0, 300);
+      if (reason.length < 3) return sendJson(response, 400, { error: 'Give a reason. It is kept in the audit log.' });
+      const outcome = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const entry = db.cashback_entries.find((item) => item.id === decodeURIComponent(entryId));
+        if (!entry) return { status: 404, error: 'Entry not found.' };
+        if (action === 'approve' && entry.status !== 'held') return { status: 409, error: 'Only held entries can be approved.' };
+        if (action === 'void' && entry.status === 'voided') return { status: 409, error: 'Already voided.' };
+        const previous = entry.status;
+        entry.status = action === 'approve' ? 'counted' : 'voided';
+        entry.reviewed_by = user.id; entry.reviewed_at = new Date().toISOString(); entry.review_reason = reason;
+        audit(db, user.id, `cashback_entry_${action === 'approve' ? 'approved' : 'voided'}`, { entry_id: entry.id, target_user_id: entry.user_id, stake: entry.stake, previous, next: entry.status, reason });
+        await writeDb(db);
+        return { status: 200, entry };
+      });
+      return sendJson(response, outcome.status, outcome.error ? { error: outcome.error } : { entry: outcome.entry });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/admin/tiers/refresh-all') {
+      const user = await currentUser(request);
+      if (!requireAdmin(response, user)) return;
+      if (!tierProvider.enabled) return sendJson(response, 503, { error: 'MCTiers lookups are switched off on this server.' });
+      const count = await withEscrowMutation(async () => {
+        const db = await readDb();
+        const now = new Date().toISOString();
+        let queued = 0;
+        for (const player of db.users) if (player.minecraft_verified && player.minecraft_uuid && player.tiers) { player.tiers.next_attempt_at = now; queued += 1; }
+        audit(db, user.id, 'tiers_refresh_all_requested', { players: queued });
+        await writeDb(db);
+        return queued;
+      });
+      syncTiers();
+      return sendJson(response, 202, { queued: count });
     }
     if (request.method === 'GET' && url.pathname === '/api/me/notifications') {
       const user = await currentUser(request);
@@ -3324,6 +3654,7 @@ async function startServer() {
   }
   for (const warning of CONFIG.warnings) observability.log('warn', 'configuration', { message: warning });
   // Safe to run on every start: it only adds history and checks waiting referrals.
+  await withEscrowMutation(async () => { const db = await readDb(); if (shop.seedCatalog(db, new Date().toISOString())) await writeDb(db); }).catch((error) => observability.log('error', 'shop_seed_failed', { message: error.message }));
   await reconcileReferrals().catch((error) => observability.log('error', 'referral_reconcile_failed', { message: error.message }));
   setInterval(() => sweepExpired().catch((error) => observability.log('error', 'sweep_failed', { message: error.message })), 30_000).unref();
   setInterval(() => rateLimiter.prune(), 60_000).unref();

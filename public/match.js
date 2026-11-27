@@ -138,16 +138,16 @@ registerPage('room', (page) => {
     const title = hidden ? '<h3>Hidden</h3>' : `<h3>${profile ? `<button class="player-name" type="button" data-profile="${escapeHtml(profile)}">${escapeHtml(name)}</button>` : escapeHtml(name)}${you ? ' <span class="player-you">You</span>' : ''}</h3>`;
     return `<article class="player-card is-${side}${winner ? ' is-winner' : ''}${loser ? ' is-loser' : ''}${hidden ? ' is-hidden' : ''}" data-side="${side}">
       <header><div><small>${label}</small>${title}</div>${resultBadge(side)}</header>
-      <div class="player-body">${hidden ? `<span class="player-head is-empty" aria-hidden="true">${icon('lock')}</span><p>Revealed once both players are ready.${ready ? ` ${ready}` : ''}</p>` : `${profile ? `<button class="player-avatar" type="button" data-profile="${escapeHtml(profile)}" aria-label="Open ${escapeHtml(name)}’s profile">${skinHead(side)}</button>` : skinHead(side)}
+      <div class="player-body">${hidden ? `<span class="player-head is-empty" aria-hidden="true">${icon('lock')}</span><p>Revealed once both players are ready.${ready ? ` ${ready}` : ''}</p>` : `${profile ? `<button class="player-avatar" type="button" data-profile="${escapeHtml(profile)}" aria-label="Open ${escapeHtml(name)}’s profile">${withBorder(skinHead(side), match[`${side}_cosmetics`], { live: true, extra: 'frame-match' })}</button>` : withBorder(skinHead(side), match[`${side}_cosmetics`], { live: true, extra: 'frame-match' })}
         <div class="player-info">
           ${minecraft ? `<span class="player-mc">${icon('check')}<span>Playing as</span><button class="copy-name" type="button" data-copy="${escapeHtml(minecraft)}" data-copy-message="Copied ${escapeHtml(minecraft)}." aria-label="Copy Minecraft name ${escapeHtml(minecraft)}">${escapeHtml(minecraft)}${icon('copy')}</button></span>` : '<span class="player-mc is-missing">Minecraft not verified</span>'}
-          <span class="player-meta">${tierBadge(match[`${side}_tier`], { showEmpty: true })}${playerTags(match[`${side}_tags`])}${ready}</span>
+          ${cosmeticTitle(match[`${side}_cosmetics`])}<span class="player-meta">${tierBadge(match[`${side}_tier`], { showEmpty: true })}${playerTags(match[`${side}_tags`])}${ready}</span>
         </div>`}
         ${score !== null && score !== undefined ? `<b class="player-score num" aria-label="${score} rounds">${score}</b>` : ''}</div>
     </article>`;
   }
   function players() {
-    const data = ['creator', 'opponent'].map((side) => [match[side], match[`${side}_tier`], match[`${side}_minecraft_username`], match[`${side}_minecraft_uuid`], match[`${side}_ready`], match[`${side}_discord_id`], match[`${side}_tags`]]);
+    const data = ['creator', 'opponent'].map((side) => [match[side], match[`${side}_cosmetics`], match[`${side}_tier`], match[`${side}_minecraft_username`], match[`${side}_minecraft_uuid`], match[`${side}_ready`], match[`${side}_discord_id`], match[`${side}_tags`]]);
     const before = drawn.players && JSON.parse(drawn.players);
     const changed = draw('players', $('#players'), [data, match.status, match.winner_side, match.final_score, match.expires_at], () => `${playerCard('creator')}<b class="room-vs" aria-hidden="true">VS</b>${playerCard('opponent')}`);
     if (!changed) return;

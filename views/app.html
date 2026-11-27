@@ -53,7 +53,7 @@
               <i id="tab-underline" aria-hidden="true"></i>
             </div>
             <div id="pane-overview" class="tab-pane" role="tabpanel" aria-labelledby="tab-overview">
-              <section class="overview-card"><span class="js-profile-avatar"></span><div><h2><span class="js-profile-name"></span> <span id="profile-tags"></span></h2><p id="profile-since" class="muted"></p></div><div class="overview-actions"><a class="btn btn-small btn-gold" href="/profile/connections">Manage connections</a><button class="btn btn-small btn-gold" type="button" id="profile-statistics">Statistics</button></div></section>
+              <section class="overview-card"><span class="js-profile-avatar"></span><div><h2><span class="js-profile-name"></span> <span id="profile-title-cos"></span> <span id="profile-tags"></span></h2><p id="profile-since" class="muted"></p></div><div class="overview-actions"><a class="btn btn-small btn-gold" href="/profile/connections">Manage connections</a><button class="btn btn-small btn-gold" type="button" id="profile-statistics">Statistics</button></div></section>
               <section class="form-card"><h2>Account</h2>
                 <label class="form-cell"><span>Discord username</span><input id="field-discord" class="input" readonly><small>Updates from Discord each time you log in</small></label>
                 <label class="form-cell"><span>Discord ID</span><input id="field-id" class="input num" readonly></label>
@@ -95,6 +95,16 @@
         <section id="referrals" class="view" aria-labelledby="referrals-title">
           <div class="view-head"><div class="view-title"><span class="view-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#users"/></svg></span><div><small>Invite friends</small><h1 id="referrals-title">Referrals</h1></div></div></div>
           <div id="referrals-content"><div class="skeleton" style="min-height:220px"></div></div>
+        </section>
+
+        <section id="cashback" class="view" aria-labelledby="cashback-title">
+          <div class="view-head"><div class="view-title"><span class="view-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#coins"/></svg></span><div><small>Rewards</small><h1 id="cashback-title">Cashback</h1></div></div></div>
+          <div id="cashback-content"><div class="skeleton" style="min-height:220px"></div></div>
+        </section>
+
+        <section id="shop" class="view" aria-labelledby="shop-title">
+          <div class="view-head"><div class="view-title"><span class="view-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#bag"/></svg></span><div><small>Snipes, protectors and cosmetics</small><h1 id="shop-title">Shop</h1></div></div></div>
+          <div id="shop-content"><div class="skeleton" style="min-height:220px"></div></div>
         </section>
 
         <section id="support" class="view" aria-labelledby="support-title">

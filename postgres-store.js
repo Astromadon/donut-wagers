@@ -8,7 +8,7 @@ const { hashToken } = require('./lib/security');
  * changed since the previous read and writes touch only the records that differ. One row in
  * donut_wagers_meta is locked by every transaction, so two servers can never spend the same balance.
  */
-const COLLECTIONS = { users: 'id', sessions: 'id', matches: 'id', tournaments: 'id', announcements: 'id', minecraft_accounts: 'user_id', verification_codes: 'id', wagers: 'id', deposits: 'id', withdrawals: 'id', support_tickets: 'id', bans: 'id', unmatched_payments: 'id', security_events: 'id', support_conversations: 'id', support_requests: 'id', referral_rewards: 'id', referrals: 'id', referral_claims: 'id', minecraft_identities: 'id' };
+const COLLECTIONS = { users: 'id', sessions: 'id', matches: 'id', tournaments: 'id', announcements: 'id', minecraft_accounts: 'user_id', verification_codes: 'id', wagers: 'id', deposits: 'id', withdrawals: 'id', support_tickets: 'id', bans: 'id', unmatched_payments: 'id', security_events: 'id', support_conversations: 'id', support_requests: 'id', referral_rewards: 'id', referrals: 'id', referral_claims: 'id', minecraft_identities: 'id', shop_products: 'id', inventory_events: 'id', cashback_entries: 'id', cashback_claims: 'id' };
 const SINGLES = ['settings', 'bot_status'];
 const STARTUP_LOCK = 'SELECT pg_advisory_xact_lock(728341)';
 

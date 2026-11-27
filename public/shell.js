@@ -375,7 +375,7 @@ async function loadFavorites() {
   if (!favorites.length) list.innerHTML = '<p class="popover-empty">Loading…</p>';
   try {
     favorites = (await api('/api/me/favorites')).players;
-    list.innerHTML = favorites.length ? favorites.map((player) => `<button class="search-result" type="button" data-player="${escapeHtml(player.discord_id)}">${avatar(player)}<span><b>${escapeHtml(player.username)}</b>${playerTags(player.tags)}${siteTierBadges(player.tiers, { interactive: false })}<small>${player.wins}–${player.losses}</small></span></button>`).join('') : '<p class="popover-empty">No favorites yet. Open a player’s statistics and press the heart to keep them here.</p>';
+    list.innerHTML = favorites.length ? favorites.map((player) => `<button class="search-result" type="button" data-player="${escapeHtml(player.discord_id)}">${avatar(player)}<span><b>${escapeHtml(player.username)}</b>${cosmeticTitle(player.cosmetics)}${playerTags(player.tags)}${siteTierBadges(player.tiers, { interactive: false })}<small>${player.wins}–${player.losses}</small></span></button>`).join('') : '<p class="popover-empty">No favorites yet. Open a player’s statistics and press the heart to keep them here.</p>';
   } catch (error) { if (!handleAuthError(error)) list.innerHTML = `<p class="popover-empty">${escapeHtml(error.message)}</p>`; }
 }
 async function toggleFavorite(button) {
@@ -400,7 +400,7 @@ async function searchPlayers() {
   try {
     const { players } = await api(`/api/players/search?q=${encodeURIComponent(query)}`);
     if (request !== searchRequest) return;
-    searchResults.innerHTML = players.length ? players.map((player) => `<button class="search-result" type="button" data-player="${escapeHtml(player.discord_id)}">${avatar(player)}<span><b>${escapeHtml(player.username)}</b>${playerTags(player.tags)}${siteTierBadges(player.tiers, { interactive: false })}<small>${player.minecraft_username ? `Plays as ${escapeHtml(player.minecraft_username)}` : 'Minecraft not verified'}</small></span></button>`).join('') : `<p class="popover-empty">No players match “${escapeHtml(query)}”.</p>`;
+    searchResults.innerHTML = players.length ? players.map((player) => `<button class="search-result" type="button" data-player="${escapeHtml(player.discord_id)}">${avatar(player)}<span><b>${escapeHtml(player.username)}</b>${cosmeticTitle(player.cosmetics)}${playerTags(player.tags)}${siteTierBadges(player.tiers, { interactive: false })}<small>${player.minecraft_username ? `Plays as ${escapeHtml(player.minecraft_username)}` : 'Minecraft not verified'}</small></span></button>`).join('') : `<p class="popover-empty">No players match “${escapeHtml(query)}”.</p>`;
   } catch (error) {
     if (request !== searchRequest) return;
     searchResults.innerHTML = `<p class="popover-empty">${escapeHtml(error.message)}</p>`;
@@ -449,7 +449,7 @@ const coin = () => icon('coins');
 function statsHead(stats, heart) {
   const chips = [stats.rank ? `<span class="stat-chip is-gold">${icon('chart')}Rank #${fullNumber(stats.rank)}</span>` : '<span class="stat-chip">Unranked</span>', `<span class="stat-chip num ${signTone(stats.total_profit)}" title="Total profit: ${fullNumber(stats.total_profit)}">${signed(stats.total_profit)}</span>`];
   const links = [`<span class="stat-link is-discord" title="Discord: ${escapeHtml(stats.username)}">${icon('discord')}<span class="sr-only">Discord: ${escapeHtml(stats.username)}</span></span>`, stats.minecraft_username ? `<span class="stat-link is-minecraft">${icon('badge')}${escapeHtml(stats.minecraft_username)}</span>` : ''];
-  return `<section class="stats-card stats-player"><p class="stats-streak">${icon('flame')}Best: <b class="num is-warm">${fullNumber(stats.best_streak)}</b><i></i>Current: <b class="num">${fullNumber(stats.current_streak)}</b><span class="sr-only">wins in a row</span></p>${avatar(stats, 'avatar-l')}<div><h3>${escapeHtml(stats.username)}${siteTierBadges(stats.tiers)}</h3>${playerTags(stats.tags)}<p class="stats-chips">${chips.join('')}</p><p class="stats-chips">${links.join('')}</p></div>${heart}</section>`;
+  return `<section class="stats-card stats-player"><p class="stats-streak">${icon('flame')}Best: <b class="num is-warm">${fullNumber(stats.best_streak)}</b><i></i>Current: <b class="num">${fullNumber(stats.current_streak)}</b>${stats.current_streak_protected ? `<span class="streak-shield" data-tier-tip="Kept by a Streak Protector.\nLongest streak with no losses: ${fullNumber(stats.best_natural_streak)}">${icon('shield')}<span class="sr-only">, kept by a Streak Protector</span></span>` : ''}<span class="sr-only">wins in a row</span></p>${avatar(stats, 'avatar-l', { live: true })}<div><h3>${escapeHtml(stats.username)}${siteTierBadges(stats.tiers)}</h3>${cosmeticTitle(stats.cosmetics)}${playerTags(stats.tags)}<p class="stats-chips">${chips.join('')}</p><p class="stats-chips">${links.join('')}</p></div>${heart}</section>`;
 }
 function statsCards(stats) {
   const total = stats.wins + stats.losses;

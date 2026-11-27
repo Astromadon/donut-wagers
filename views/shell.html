@@ -45,8 +45,9 @@
         <h2><span class="label">Shop</span></h2>
         <a href="/shop" data-nav="shop"><svg class="icon" aria-hidden="true"><use href="/icons.svg#bag"/></svg><span class="label">Shop</span></a>
         <a href="/gift-cards" data-nav="gift-cards"><svg class="icon" aria-hidden="true"><use href="/icons.svg#gift"/></svg><span class="label">Gift Cards</span></a>
-        <h2><span class="label">Referrals</span></h2>
+        <h2><span class="label">Rewards</span></h2>
         <a href="/referrals" data-nav="referrals"><svg class="icon" aria-hidden="true"><use href="/icons.svg#users"/></svg><span class="label">Referrals</span></a>
+        <a href="/cashback" data-nav="cashback"><svg class="icon" aria-hidden="true"><use href="/icons.svg#coins"/></svg><span class="label">Cashback</span></a>
         <div id="recent" data-auth-in hidden><h2><span class="label">Recently played</span></h2><div id="recent-list"></div></div>
         <h2><span class="label">Profile</span></h2>
         <a href="/profile" data-nav="profile"><svg class="icon" aria-hidden="true"><use href="/icons.svg#user"/></svg><span class="label">Profile</span></a>
@@ -87,7 +88,7 @@
             <button id="profile-menu-toggle" class="profile-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="profile-menu" aria-label="Account menu"><span class="js-avatar"><span class="avatar">{{avatar}}</span></span><svg class="icon chevron" aria-hidden="true"><use href="/icons.svg#down"/></svg></button>
             <div id="profile-menu" class="popover profile-menu" role="menu" aria-label="Account">
               <div class="profile-menu-head"><span class="js-avatar"><span class="avatar">{{avatar}}</span></span><div><b class="js-username">{{username}}</b><small>{{discordId}}</small></div></div>
-              <div class="menu-group"><a role="menuitem" href="/profile"><svg class="icon" aria-hidden="true"><use href="/icons.svg#user"/></svg>Profile</a><button role="menuitem" id="open-statistics" type="button"><svg class="icon" aria-hidden="true"><use href="/icons.svg#stats"/></svg>Statistics</button><a role="menuitem" href="/teams"><svg class="icon" aria-hidden="true"><use href="/icons.svg#users"/></svg>Teams</a></div>
+              <div class="menu-group"><a role="menuitem" href="/profile"><svg class="icon" aria-hidden="true"><use href="/icons.svg#user"/></svg>Profile</a><button role="menuitem" id="open-statistics" type="button"><svg class="icon" aria-hidden="true"><use href="/icons.svg#stats"/></svg>Statistics</button><a role="menuitem" href="/cashback"><svg class="icon" aria-hidden="true"><use href="/icons.svg#coins"/></svg>Cashback</a></div>
               <form class="menu-group" method="post" action="/auth/logout"><button role="menuitem" class="is-danger" type="submit"><svg class="icon" aria-hidden="true"><use href="/icons.svg#logout"/></svg>Log out</button></form>
             </div>
           </div>
@@ -121,6 +122,6 @@
   <div id="toast" role="status" popover="manual"></div>
   <div id="announcer" class="sr-only" role="status"></div>
   <script type="application/json" id="viewer">{{viewer}}</script>
-  <script src="/common.js" defer></script><script src="/shell.js" defer></script><script src="/landing.js" defer></script><script src="/support.js" defer></script><script src="/dashboard.js" defer></script><script src="/match.js" defer></script><script src="/start.js" defer></script>
+  <script src="/common.js" defer></script><script src="/shell.js" defer></script><script src="/landing.js" defer></script><script src="/support.js" defer></script><script src="/shop.js" defer></script><script src="/dashboard.js" defer></script><script src="/match.js" defer></script><script src="/start.js" defer></script>
 </body>
 </html>

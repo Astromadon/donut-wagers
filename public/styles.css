@@ -451,3 +451,21 @@ dialog[open]::backdrop { background: rgba(0, 0, 0, .76); transition: background-
   .history-go { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .history-card { animation: fade-in .12s linear both !important; } }
+
+/* ---------- Cosmetics: profile borders and titles ---------- */
+.avatar-frame { position: relative; display: inline-grid; flex: none; place-items: center; isolation: isolate; }
+.avatar-frame > .border-art { position: absolute; z-index: 2; top: 50%; left: 50%; width: 148%; height: 148%; max-width: none; transform: translate(-50%, -50%); pointer-events: none; }
+.avatar-frame.frame-xl > .border-art, .avatar-frame.frame-match > .border-art, .avatar-frame.frame-podium > .border-art { width: 162%; height: 162%; }
+.avatar-frame.frame-s > .border-art { width: 140%; height: 140%; }
+.cos-title { display: inline-flex; align-items: center; max-width: 100%; padding: 1px 8px; overflow: hidden; border: 1px solid currentColor; border-radius: 999px; font-size: 10.5px; font-weight: 850; letter-spacing: .06em; line-height: 16px; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; vertical-align: middle; cursor: default; }
+.cos-title::before { content: "❝"; margin-right: 4px; font-size: 9px; opacity: .7; }
+.rarity-common { color: #c9c9c9; border-color: #c9c9c955; background: #c9c9c90f; }
+.rarity-uncommon { color: #5bd67a; border-color: #5bd67a55; background: #5bd67a12; }
+.rarity-rare { color: #4fb2ff; border-color: #4fb2ff55; background: #4fb2ff12; }
+.rarity-epic { color: #c27bff; border-color: #c27bff66; background: #c27bff14; text-shadow: 0 0 8px #c27bff55; }
+.rarity-legendary { color: #ffc23d; border-color: #ffc23d77; background: #ffc23d14; text-shadow: 0 0 10px #ffc23d66; }
+.rarity-mythic { color: #ff5e7e; border-color: #ff5e7e88; background: linear-gradient(90deg, #ff5e7e14, #ffbf0f1f, #c27bff1a, #ff5e7e14); background-size: 300% 100%; text-shadow: 0 0 10px #ff5e7e77; animation: mythic-shift 6s linear infinite; }
+@keyframes mythic-shift { to { background-position: 300% 0; } }
+.streak-shield { display: inline-grid; place-items: center; margin-left: 6px; color: #4fb2ff; cursor: default; }
+.streak-shield .icon { width: 14px; height: 14px; }
+@media (prefers-reduced-motion: reduce) { .rarity-mythic { animation: none; } }

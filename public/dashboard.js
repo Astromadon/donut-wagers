@@ -6,13 +6,14 @@ registerPage('app', (page) => {
   const MIN_WITHDRAWAL = 15_000_000;
   const HISTORY_LABELS = { deposit: ['Deposit', 'deposit'], withdrawal: ['Withdrawal', 'withdraw'], match_won: ['Match won', 'trophy'], match_lost: ['Match lost', 'swords'], tournament_prize: ['Tournament prize', 'crown'], referral_reward: ['Referral reward', 'users'] };
   const PROFILE_TABS = { overview: 'Profile settings', matches: 'Match history', transactions: 'Transactions', connections: 'Connections' };
-  const VIEWS = { matches: 'Matches', tournaments: 'Tournaments', leaderboard: 'Leaderboard', wallet: 'Wallet', profile: 'Profile settings', settings: 'Settings', support: 'AI Support', referrals: 'Referrals', admin: 'Admin' };
+  const VIEWS = { matches: 'Matches', tournaments: 'Tournaments', leaderboard: 'Leaderboard', wallet: 'Wallet', profile: 'Profile settings', settings: 'Settings', support: 'AI Support', referrals: 'Referrals', cashback: 'Cashback', shop: 'Shop', admin: 'Admin' };
 
   let openMatches = null;
   let ongoingMatches = null;
   let myMatches = [];
   let currentView = 'matches';
   const support = createSupportView(page);
+  const shopView = createShopView(page);
   // Filters are remembered for this tab, so coming back from a match finds the lobby as it was left.
   const FILTERS_KEY = 'lobby-filters';
   const filters = { status: 'available', mode: 'all', region: 'all', sort: 'newest', query: '' };
@@ -27,8 +28,9 @@ registerPage('app', (page) => {
     const verified = isVerified();
     $('#wallet-balance').textContent = fullNumber(me.balance);
     $('#locked').textContent = fullNumber(me.locked_balance);
-    $$('.js-profile-avatar').forEach((element) => { element.innerHTML = avatar(me); });
+    $$('.js-profile-avatar').forEach((element) => { element.innerHTML = avatar(me, '', { live: true }); });
     $$('.js-profile-name').forEach((element) => { element.textContent = me.username; });
+    if ($('#profile-title-cos')) $('#profile-title-cos').innerHTML = cosmeticTitle(me.cosmetics);
     $('#profile-tags').innerHTML = playerTags(me.tags) + siteTierBadges(me.tiers);
     const wait = me.tiers_refresh_at ? `Refresh available ${new Date(me.tiers_refresh_at).toLocaleTimeString(undefined, { timeStyle: 'short' })}` : '';
     $('#profile-tiers').innerHTML = tiersPanel(me.tiers, ['not_verified', 'no_account_id'].includes(me.tiers.status) ? (me.tiers.status === 'not_verified' ? '<button class="btn btn-small btn-primary" type="button" data-verify>Verify Minecraft</button>' : '') : `<button class="btn btn-small" type="button" data-tiers-refresh ${wait ? 'disabled' : ''}>${icon('refresh')}${wait || 'Refresh'}</button>`);
@@ -97,7 +99,7 @@ registerPage('app', (page) => {
     if (view !== 'wallet') stopWalletTimers();
     if (view === 'profile') showProfileTab();
     if (!entering) return 'inner';
-    ({ tournaments: () => loadTournaments(), leaderboard: loadLeaderboard, wallet: openWallet, support: () => support.open(), referrals: loadReferrals, admin: loadAdmin }[view])?.();
+    ({ tournaments: () => loadTournaments(), leaderboard: loadLeaderboard, wallet: openWallet, support: () => support.open(), referrals: loadReferrals, cashback: shopView.loadCashback, shop: shopView.loadShop, admin: loadAdmin }[view])?.();
     return 'view';
   }
 
@@ -206,7 +208,7 @@ registerPage('app', (page) => {
   async function loadRail() {
     const [boardResult, eventResult] = await Promise.allSettled([api('/api/leaderboard?period=week&sort=earned'), api('/api/tournaments')]);
     const players = boardResult.status === 'fulfilled' ? boardResult.value.players.slice(0, 5) : [];
-    $('#rail-top').innerHTML = players.length ? players.map((player) => `<button class="rail-row" type="button" data-player="${escapeHtml(player.discord_id)}">${avatar(player)}<span>${escapeHtml(player.username)}<small>${player.wins}–${player.losses}</small></span><b class="num is-money">${shortAmount(player.earned)}</b></button>`).join('') : '<p class="rail-empty">No settled matches this week yet.</p>';
+    $('#rail-top').innerHTML = players.length ? players.map((player) => `<button class="rail-row" type="button" data-player="${escapeHtml(player.discord_id)}">${avatar(player)}<span>${escapeHtml(player.username)}${cosmeticTitle(player.cosmetics)}<small>${player.wins}–${player.losses}</small></span><b class="num is-money">${shortAmount(player.earned)}</b></button>`).join('') : '<p class="rail-empty">No settled matches this week yet.</p>';
     const event = eventResult.status === 'fulfilled' ? eventResult.value.tournaments.find((item) => item.status === 'OPEN') || eventResult.value.tournaments.find((item) => item.status === 'IN_PROGRESS') : null;
     $('#rail-event').hidden = !event;
     if (event) $('#rail-event-body').innerHTML = `<a class="rail-row" href="/tournaments">${icon('trophy')}<span>${escapeHtml(event.name)}<small>${event.status === 'OPEN' ? `${event.registered_count} of ${event.max_players} registered` : 'In progress'}</small></span><b class="num is-money">${shortAmount(event.winner_prize)}</b></a>`;
@@ -417,8 +419,8 @@ registerPage('app', (page) => {
     const [value, spoken, tone] = boardValue(row);
     return `<li class="podium-spot is-${place}" style="--i:${place === 1 ? 0 : place === 2 ? 1 : 2}">
       ${place === 1 ? '<span class="podium-crown" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5z" fill="currentColor"/></svg></span>' : ''}
-      <button class="podium-avatar" type="button" data-player="${escapeHtml(row.discord_id)}" tabindex="-1" aria-hidden="true">${boardAvatar(row, place === 1 ? 104 : 76)}<b class="podium-rank" aria-hidden="true">${place}</b></button>
-      <button class="podium-name" type="button" data-player="${escapeHtml(row.discord_id)}">${escapeHtml(row.username)}<span class="sr-only">, rank ${place}</span></button>
+      <button class="podium-avatar" type="button" data-player="${escapeHtml(row.discord_id)}" tabindex="-1" aria-hidden="true">${boardAvatar(row, place === 1 ? 104 : 76)}${borderArt(row.cosmetics, place === 1)}<b class="podium-rank" aria-hidden="true">${place}</b></button>
+      <button class="podium-name" type="button" data-player="${escapeHtml(row.discord_id)}">${escapeHtml(row.username)}<span class="sr-only">, rank ${place}</span></button>${cosmeticTitle(row.cosmetics)}
       ${siteTierBadges(row.tiers)}
       <div class="podium-box"><small>${BOARD_LABELS[board.sort]}</small><b class="num ${tone}" aria-label="${escapeHtml(spoken)}">${coinIcon()}${escapeHtml(value)}</b></div>
       <span class="podium-pedestal" aria-hidden="true"></span>
@@ -426,8 +428,8 @@ registerPage('app', (page) => {
   }
   function boardRow(row) {
     const [value, spoken, tone] = boardValue(row);
-    return `<li class="board-row${row.is_viewer ? ' is-viewer' : ''}"><b class="board-rank num">${row.rank}</b><span class="board-avatar head">${boardAvatar(row, 40)}</span>
-      <div class="board-player"><button class="board-name" type="button" data-player="${escapeHtml(row.discord_id)}">${escapeHtml(row.username)}${row.is_viewer ? ' <span class="player-you">You</span>' : ''}</button>${siteTierBadges(row.tiers)}</div>
+    return `<li class="board-row${row.is_viewer ? ' is-viewer' : ''}"><b class="board-rank num">${row.rank}</b>${withBorder(`<span class="board-avatar head">${boardAvatar(row, 40)}</span>`, row.cosmetics, { extra: 'frame-s' })}
+      <div class="board-player"><button class="board-name" type="button" data-player="${escapeHtml(row.discord_id)}">${escapeHtml(row.username)}${row.is_viewer ? ' <span class="player-you">You</span>' : ''}</button>${cosmeticTitle(row.cosmetics)}${siteTierBadges(row.tiers)}</div>
       <div class="board-value"><small>${BOARD_LABELS[board.sort]}</small><b class="num ${tone}" aria-label="${escapeHtml(spoken)}">${coinIcon()}${escapeHtml(value)}</b></div>
       <button class="btn btn-small board-stats" type="button" data-player="${escapeHtml(row.discord_id)}" aria-label="Stats for ${escapeHtml(row.username)}">Stats${icon('right')}</button></li>`;
   }
@@ -708,6 +710,8 @@ registerPage('app', (page) => {
     loadHealth();
     loadSupportQueue();
     loadAdminReferrals();
+    shopView.loadAdminShop();
+    shopView.loadAdminCashback();
     loadBans();
     loadTournaments(true);
     api('/api/announcements').then((result) => { $('#announcement-visible').checked = result.enabled !== false; }).catch(() => undefined);
@@ -867,19 +871,6 @@ registerPage('app', (page) => {
 
   /* ---------- Admin: referrals ---------- */
   const adminReferrals = { status: '', q: '', page: 1 };
-  function reasonDialog(title, confirm, danger) {
-    return new Promise((resolve) => {
-      const dialog = document.createElement('dialog');
-      dialog.setAttribute('aria-labelledby', 'reason-title');
-      dialog.innerHTML = `<form class="dialog-body" method="dialog"><div class="dialog-head"><div><h2 id="reason-title">${escapeHtml(title)}</h2><p>The reason is kept in the audit log.</p></div></div><label class="field"><span>Reason</span><input class="input" name="reason" maxlength="300" required minlength="3" autocomplete="off"></label><div class="dialog-actions"><button class="btn btn-quiet" type="button" value="no">Back</button><button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" type="submit" value="yes">${escapeHtml(confirm)}</button></div></form>`;
-      const input = dialog.querySelector('input');
-      dialog.addEventListener('click', (event) => { if (event.target === dialog || event.target.value === 'no') dialog.close(''); });
-      dialog.querySelector('form').addEventListener('submit', (event) => { event.preventDefault(); if (input.value.trim().length >= 3) dialog.close(input.value.trim()); });
-      dialog.addEventListener('close', () => { resolve(dialog.returnValue || null); dialog.remove(); });
-      document.body.append(dialog);
-      dialog.showModal();
-    });
-  }
   async function loadAdminReferrals() {
     const box = $('#admin-referrals');
     if (!box) return;
@@ -1010,7 +1001,8 @@ registerPage('app', (page) => {
         const refresh = player.minecraft_uuid ? `<button class="btn btn-small" type="button" data-admin-player="tiers" data-id="${id}">Refresh tiers</button>` : '';
         const signOut = player.is_owner ? '' : `<button class="btn btn-small" type="button" data-admin-player="signout" data-id="${id}">Sign out</button>`;
         const verify = ban ? '' : `<button class="btn btn-small" type="button" data-admin-player="verify" data-id="${id}">${player.minecraft_verified ? 'Change Minecraft' : 'Verify Minecraft'}</button>`;
-        const actions = refresh + verify + signOut + (player.is_owner ? '<span class="tag">Protected</span>' : `<button class="btn btn-small" type="button" data-admin-player="tags" data-id="${id}">Tags</button>${ban ? `<button class="btn btn-small btn-good" type="button" data-admin-player="unban" data-id="${id}">Unban</button>` : player.is_admin ? '' : `<button class="btn btn-small btn-danger" type="button" data-admin-player="ban" data-id="${id}">Ban</button>`}`);
+        const items = `<button class="btn btn-small" type="button" data-admin-player="items" data-id="${id}">Items</button>`;
+        const actions = refresh + verify + items + signOut + (player.is_owner ? '<span class="tag">Protected</span>' : `<button class="btn btn-small" type="button" data-admin-player="tags" data-id="${id}">Tags</button>${ban ? `<button class="btn btn-small btn-good" type="button" data-admin-player="unban" data-id="${id}">Unban</button>` : player.is_admin ? '' : `<button class="btn btn-small btn-danger" type="button" data-admin-player="ban" data-id="${id}">Ban</button>`}`);
         return `<article class="admin-row panel"><div><h3 class="admin-title-row"><span>${escapeHtml(player.username)}</span>${siteTierBadges(player.tiers)}${playerTags(player.tags)}${ban ? '<span class="tag tag-bad">Banned</span>' : ''}</h3><p>${player.minecraft_username ? `${escapeHtml(player.minecraft_username)}, ` : ''}Discord ID ${id}${ban ? `. Reason: ${escapeHtml(ban.reason)}${ban.expires_at ? `, until ${escapeHtml(new Date(ban.expires_at).toLocaleString())}` : ', permanent'}` : ''}</p>${player.minecraft_uuid ? `<p class="muted admin-uuid">Minecraft ID ${escapeHtml(player.minecraft_uuid)}. ${escapeHtml(tierSummary(player.tiers))}${player.tiers_error ? ` Last error: ${escapeHtml(player.tiers_error)}` : ''}</p>` : ''}</div><div class="admin-actions">${actions}</div></article>`;
       }).join('') : emptyState('search', 'No matching player', 'Try a Discord ID or a Minecraft name.');
     } catch (error) { if (request === adminSearchRequest) box.innerHTML = emptyState('alert', 'Search failed', error.message); }
@@ -1029,6 +1021,8 @@ registerPage('app', (page) => {
       $('#tags-title').textContent = `Tags for ${player.username}`;
       $('#tags-form').elements.tags.value = (player.tags || []).join(', ');
       $('#tags-dialog').showModal();
+    } else if (button.dataset.adminPlayer === 'items') {
+      shopView.playerItems(player).catch((error) => toast(error.message, true));
     } else if (button.dataset.adminPlayer === 'verify') {
       $('#verify-player-form').reset();
       $('#verify-player-title').textContent = `Verify Minecraft for ${player.username}`;
@@ -1182,7 +1176,7 @@ registerPage('app', (page) => {
   loadRail();
   // Live changes refresh the lobby straight away; the poll only runs while live updates are down.
   page.onLive(['lobby'], () => Promise.all([refresh(), loadRail()]));
-  page.onLive(['account'], () => Promise.all([loadRail(), walletCheck?.(), currentView === 'support' && support.refresh(), currentView === 'referrals' && loadReferrals()]));
+  page.onLive(['account'], () => Promise.all([loadRail(), walletCheck?.(), currentView === 'support' && support.refresh(), currentView === 'referrals' && loadReferrals(), currentView === 'cashback' && shopView.loadCashback(), currentView === 'shop' && shopView.loadShop()]));
   page.poll(refresh, 15_000);
   page.on(document, 'visibilitychange', () => { if (!document.hidden && !live.connected) refresh(); });
   return {

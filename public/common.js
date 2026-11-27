@@ -122,9 +122,29 @@ function statusTag(match) {
   return `<span class="tag ${tone ? `tag-${tone}` : ''}">${escapeHtml(label)}</span>`;
 }
 
-function avatar(player, extra = '') {
+/* Cosmetics from the shop. A title is never styled like a tier badge and always says it is cosmetic. */
+const BORDER_ART = /^[a-z-]{2,30}$/;
+/** The border image for an equipped border. Lists use the still file; profiles and previews animate. */
+function borderArt(cosmetics, live = false) {
+  const border = cosmetics?.border;
+  if (!border || !BORDER_ART.test(String(border.art || ''))) return '';
+  return `<img class="border-art" src="/borders/${border.art}${live ? '' : '-static'}.svg" alt="" aria-hidden="true" decoding="async" loading="lazy">`;
+}
+/** Puts the equipped border around any avatar markup. */
+function withBorder(markup, cosmetics, { live = false, extra = '' } = {}) {
+  const art = borderArt(cosmetics, live);
+  return art ? `<span class="avatar-frame ${extra}" data-rarity="${escapeHtml(cosmetics.border.rarity)}">${markup}${art}</span>` : markup;
+}
+function cosmeticTitle(cosmetics) {
+  const title = cosmetics?.title;
+  if (!title) return '';
+  return `<span class="cos-title rarity-${escapeHtml(title.rarity)}" data-tier-tip="Cosmetic title from the shop.
+Not a PvP ranking."><span class="sr-only">Cosmetic title: </span>${escapeHtml(title.name)}</span>`;
+}
+const RARITY_NAMES = { common: 'Common', uncommon: 'Uncommon', rare: 'Rare', epic: 'Epic', legendary: 'Legendary', mythic: 'Mythic' };
+function avatar(player, extra = '', { live = false } = {}) {
   const initial = escapeHtml(String(player?.username || '?').trim().charAt(0) || '?');
-  return `<span class="avatar ${extra}">${player?.avatar_url ? `<img src="${escapeHtml(player.avatar_url)}" alt="" loading="lazy">` : initial}</span>`;
+  return withBorder(`<span class="avatar ${extra}">${player?.avatar_url ? `<img src="${escapeHtml(player.avatar_url)}" alt="" loading="lazy">` : initial}</span>`, player?.cosmetics, { live, extra: extra ? `frame-${extra}` : '' });
 }
 function tagStyle(tag) {
   const name = String(tag || '').trim().toLowerCase();
@@ -228,6 +248,20 @@ function confirmDialog({ title, image = '', body = '', rows = [], confirm = 'Con
       if (button) dialog.close(button.value);
     });
     dialog.addEventListener('close', () => { resolve(dialog.returnValue === 'yes'); dialog.remove(); });
+    document.body.append(dialog);
+    dialog.showModal();
+  });
+}
+/** Asks for a reason of at least 3 characters (kept in the audit log). Resolves the text, or null. */
+function reasonDialog(title, confirm, danger) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement('dialog');
+    dialog.setAttribute('aria-labelledby', 'reason-title');
+    dialog.innerHTML = `<form class="dialog-body" method="dialog"><div class="dialog-head"><div><h2 id="reason-title">${escapeHtml(title)}</h2><p>The reason is kept in the audit log.</p></div></div><label class="field"><span>Reason</span><input class="input" name="reason" maxlength="300" required minlength="3" autocomplete="off"></label><div class="dialog-actions"><button class="btn btn-quiet" type="button" value="no">Back</button><button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" type="submit" value="yes">${escapeHtml(confirm)}</button></div></form>`;
+    const input = dialog.querySelector('input');
+    dialog.addEventListener('click', (event) => { if (event.target === dialog || event.target.value === 'no') dialog.close(''); });
+    dialog.querySelector('form').addEventListener('submit', (event) => { event.preventDefault(); if (input.value.trim().length >= 3) dialog.close(input.value.trim()); });
+    dialog.addEventListener('close', () => { resolve(dialog.returnValue || null); dialog.remove(); });
     document.body.append(dialog);
     dialog.showModal();
   });

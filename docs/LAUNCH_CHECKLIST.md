@@ -14,6 +14,8 @@
 - [ ] Security contact published
 - [ ] Match rules in `lib/match-rules.js` reviewed (disconnect and forfeit rules, allowed and banned mods, kit wording are new policy)
 - [ ] Referral rewards checked against promotion and incentive rules where you operate
+- [ ] Shop prices and cashback rate decided. Cashback stays off until the rate is below the 10% platform fee (see `docs/SHOP_AND_CASHBACK.md`)
+- [ ] Paid cosmetics and consumables checked against consumer and promotion rules where you operate
 - [ ] MCTiers' terms checked for this use of their public API
 
 ## Staging

@@ -52,7 +52,7 @@ test('every navigation link opens its page without reloading the frame', async (
   await signIn(0);
   await page.goto(server.base);
   await page.evaluate(() => { window.sameDocument = true; window.background = document.querySelector('.backdrop > div'); });
-  for (const [name, path] of [['matches', '/matches'], ['tournaments', '/tournaments'], ['leaderboard', '/leaderboard'], ['shop', '/shop'], ['gift-cards', '/gift-cards'], ['referrals', '/referrals'], ['profile', '/profile'], ['support', '/support'], ['settings', '/settings'], ['admin', '/admin']]) {
+  for (const [name, path] of [['matches', '/matches'], ['tournaments', '/tournaments'], ['leaderboard', '/leaderboard'], ['shop', '/shop'], ['gift-cards', '/gift-cards'], ['referrals', '/referrals'], ['cashback', '/cashback'], ['profile', '/profile'], ['support', '/support'], ['settings', '/settings'], ['admin', '/admin']]) {
     await page.locator(`.sidebar [data-nav="${name}"]`).click();
     await expect(page).toHaveURL(server.base + path);
     await expect(page.locator(`.sidebar [data-nav="${name}"]`)).toHaveAttribute('aria-current', 'page');
@@ -91,8 +91,8 @@ test('account menu: mouse, keyboard, Escape, and outside click', async ({ page, 
   await expect(menu.getByRole('menuitem', { name: 'Profile' })).toBeFocused();
   await page.keyboard.press('ArrowDown'); await expect(menu.getByRole('menuitem', { name: 'Statistics' })).toBeFocused();
   await page.keyboard.press('Escape'); await expect(menu).toBeHidden(); await expect(toggle).toBeFocused();
-  await toggle.click(); await menu.getByRole('menuitem', { name: 'Teams' }).click();
-  await expect(page.getByRole('heading', { name: 'Teams aren’t available yet' })).toBeVisible();
+  await toggle.click(); await menu.getByRole('menuitem', { name: 'Cashback' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Cashback' })).toBeVisible();
 });
 
 test('full match through the interface: create, cancel, join, ready, report, settle', async ({ page, browser, server, signIn }) => {
@@ -338,7 +338,7 @@ test.describe('PvP tiers', () => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await signIn(0);
     const found = [];
-    for (const path of ['/profile', '/matches', '/leaderboard', '/profile/matches', '/matches/code4aa', '/support', '/admin']) {
+    for (const path of ['/profile', '/matches', '/leaderboard', '/profile/matches', '/matches/code4aa', '/support', '/shop', '/shop#borders', '/shop#inventory', '/cashback', '/admin']) {
       await page.goto(server.base + path);
       await settle(page);
       if (path === '/matches') await page.getByRole('button', { name: /Ongoing/ }).click();
@@ -688,4 +688,37 @@ test('referrals: link, progress, claiming a milestone, and the switched-off stat
   await page.reload();
   await expect(page.locator('.ref-off')).toContainText('switched off');
   await expect(page.locator('.milestone').first()).toContainText('Claimed');
+});
+test('shop: preview, buy and equip a border and a title through the interface', async ({ page, server, signIn }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await signIn(3);
+  await page.goto(`${server.base}/shop#borders`);
+  await page.locator('[data-preview="border-emerald"]').click();
+  await expect(page.locator('.shop-preview .border-art')).toHaveAttribute('src', '/borders/emerald.svg');
+  await page.locator('[data-buy="border-emerald"]').click();
+  await page.getByRole('button', { name: /^Pay/ }).click();
+  await page.locator('[data-equip="border-emerald"]').click();
+  await expect(page.locator('.shop-preview-text small')).toHaveText('Your look');
+  await expect(page.locator('.shop-preview .border-art')).toHaveAttribute('src', '/borders/emerald.svg');
+  await page.locator('[data-shop-tab="titles"]').click();
+  await page.locator('[data-buy="title-lock-in"]').click();
+  await page.getByRole('button', { name: /^Pay/ }).click();
+  await page.locator('[data-equip="title-lock-in"]').click();
+  await expect(page.locator('.shop-preview .cos-title')).toContainText('Lock IN');
+  await page.locator('[data-shop-tab="inventory"]').click();
+  await expect(page.locator('.inv-list .is-equipped')).toHaveCount(2);
+  await page.goto(`${server.base}/profile`);
+  await expect(page.locator('#profile-title-cos .cos-title')).toContainText('Lock IN');
+  await expect(page.locator('.overview-card .avatar-frame .border-art')).toBeVisible();
+
+});
+test('cashback page explains itself and shows that it is switched off', async ({ page, server, signIn }) => {
+  await signIn(3);
+  await page.goto(`${server.base}/cashback`);
+  await expect(page.locator('#cashback-content .notice-warn')).toContainText('switched off');
+  await expect(page.locator('.cash-rate')).toContainText('12% cashback rate');
+  await expect(page.locator('.cash-marks li')).toHaveCount(5);
+  await page.locator('.profile-toggle').click();
+  await expect(page.getByRole('menuitem', { name: 'Cashback' })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: 'Teams' })).toHaveCount(0);
 });
